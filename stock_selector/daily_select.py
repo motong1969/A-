@@ -1,6 +1,7 @@
 import argparse
 from datetime import date
 from pathlib import Path
+import signal
 
 import pandas as pd
 
@@ -8,6 +9,10 @@ from stock_selector.akshare_engine import AkShareSelectionResult, AkShareV1Engin
 from stock_selector.data.baostock import BaoStockDataFetcher
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
 from stock_selector.history_validation import update_selection_history
+
+
+def _raise_run_timeout(signum, frame):
+    raise TimeoutError("run_daily_select exceeded 5-minute runtime limit")
 
 
 def _candidate_rows(result: AkShareSelectionResult, items) -> list[dict]:
@@ -213,6 +218,8 @@ def main() -> None:
     args = parser.parse_args()
 
     fetcher = MockAkShareDataFetcher() if args.mode == "mock" else (BaoStockDataFetcher() if args.mode == "baostock" else None)
+    previous = signal.signal(signal.SIGALRM, _raise_run_timeout)
+    signal.alarm(300)
     try:
         result = AkShareV1Engine(fetcher=fetcher, sector_member_limit=args.sector_limit).run(
             date.fromisoformat(args.date), limit=args.limit
@@ -232,11 +239,17 @@ def main() -> None:
         print(f"Markdown report: {report_path}")
         print(f"Today summary: {today_stock_path}")
         print(f"Selection history: {history_path}")
+    except TimeoutError as exc:
+        print(f"运行超时：{exc}")
+        print("已在5分钟上限内终止本次执行。")
+        return
     except Exception as exc:
         print(f"数据获取失败：{exc}")
         print("请稍后重试，或使用 --mode mock 验证流程。")
         return
     finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
         if hasattr(fetcher, "close"):
             fetcher.close()
 

@@ -11,12 +11,13 @@ import pandas as pd
 class BaoStockDataFetcher:
     """BaoStock-backed free data source with local daily-bar cache."""
 
-    prefer_full_universe = True
+    prefer_full_universe = False
 
     def __init__(self, *, cache_dir: Path | str = ".cache/baostock", client: Any | None = None) -> None:
         self.cache_dir = Path(cache_dir)
         self.daily_cache_dir = self.cache_dir / "daily"
         self.empty_cache_dir = self.cache_dir / "empty"
+        self.all_stock_cache_path = self.cache_dir / "all_stock.csv"
         self.daily_cache_dir.mkdir(parents=True, exist_ok=True)
         self.empty_cache_dir.mkdir(parents=True, exist_ok=True)
         if client is not None:
@@ -34,7 +35,7 @@ class BaoStockDataFetcher:
 
     def close(self) -> None:
         try:
-            self.client.logout()
+            self._call_with_timeout(self.client.logout, timeout_seconds=2, label="logout")
         except Exception:
             pass
 
@@ -142,12 +143,24 @@ class BaoStockDataFetcher:
         return shares * close if shares > 0 and close > 0 else 0.0
 
     def _query_all_stock_with_fallback(self, target_date: date) -> pd.DataFrame:
-        for offset in range(0, 11):
-            day = target_date - timedelta(days=offset)
-            result = self.client.query_all_stock(day=day.isoformat())
-            frame = _result_to_frame(result)
-            if not frame.empty:
-                return frame
+        day = target_date
+        try:
+            frame = self._call_with_timeout(
+                lambda: _result_to_frame(self.client.query_all_stock(day=day.isoformat())),
+                timeout_seconds=5,
+                label=f"query_all_stock({day.isoformat()})",
+            )
+        except TimeoutError:
+            frame = pd.DataFrame()
+        if not frame.empty:
+            try:
+                frame.to_csv(self.all_stock_cache_path, index=False)
+            except Exception:
+                pass
+            return frame
+        cached = self._cached_stock_universe()
+        if not cached.empty:
+            return cached
         return pd.DataFrame(columns=["code", "tradeStatus", "code_name"])
 
     def _query_history(self, code: str, start_date: date, end_date: date) -> pd.DataFrame:
@@ -197,16 +210,11 @@ class BaoStockDataFetcher:
         ].sort_values("trade_date").reset_index(drop=True)
 
     def _query_history_with_timeout(self, code: str, start_date: date, end_date: date) -> pd.DataFrame:
-        def _raise_timeout(signum, frame):
-            raise TimeoutError(f"BaoStock history request timed out for {code}")
-
-        previous = signal.signal(signal.SIGALRM, _raise_timeout)
-        signal.alarm(8)
-        try:
-            return self._query_history(code, start_date, end_date)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, previous)
+        return self._call_with_timeout(
+            lambda: self._query_history(code, start_date, end_date),
+            timeout_seconds=8,
+            label=f"history({code})",
+        )
 
     def _read_daily_cache(self, symbol: str) -> pd.DataFrame:
         path = self.daily_cache_dir / f"{symbol}.csv"
@@ -241,6 +249,24 @@ class BaoStockDataFetcher:
             )
         return pd.DataFrame(rows)
 
+    def _cached_stock_universe(self) -> pd.DataFrame:
+        if self.all_stock_cache_path.exists():
+            try:
+                cached = pd.read_csv(self.all_stock_cache_path)
+                required = {"code", "code_name"}
+                if required.issubset(set(cached.columns)):
+                    if "tradeStatus" not in cached.columns:
+                        cached["tradeStatus"] = "1"
+                    return cached[["code", "tradeStatus", "code_name"]].copy()
+            except Exception:
+                pass
+        rows = []
+        for path in self.daily_cache_dir.glob("*.csv"):
+            code = path.stem.zfill(6)
+            bs_code = _baostock_code(code)
+            rows.append({"code": bs_code, "tradeStatus": "1", "code_name": code})
+        return pd.DataFrame(rows, columns=["code", "tradeStatus", "code_name"])
+
     def _stock_industry_map(self) -> dict[str, str]:
         path = self.cache_dir / "stock_industry.csv"
         if path.exists():
@@ -249,8 +275,14 @@ class BaoStockDataFetcher:
                 return {str(row["code"]): str(row["industry"]) for _, row in cached.iterrows()}
             except Exception:
                 pass
-        result = self.client.query_stock_industry()
-        frame = _result_to_frame(result)
+        try:
+            frame = self._call_with_timeout(
+                lambda: _result_to_frame(self.client.query_stock_industry()),
+                timeout_seconds=8,
+                label="query_stock_industry",
+            )
+        except TimeoutError:
+            return {}
         if frame.empty:
             return {}
         frame = frame[["code", "industry"]].copy()
@@ -276,8 +308,13 @@ class BaoStockDataFetcher:
         for year in (date.today().year, date.today().year - 1):
             for quarter in (4, 3, 2, 1):
                 try:
-                    result = self.client.query_profit_data(code=code, year=year, quarter=quarter)
-                    frame = _result_to_frame(result)
+                    frame = self._call_with_timeout(
+                        lambda: _result_to_frame(
+                            self.client.query_profit_data(code=code, year=year, quarter=quarter)
+                        ),
+                        timeout_seconds=5,
+                        label=f"query_profit_data({code},{year}Q{quarter})",
+                    )
                 except Exception:
                     continue
                 if frame.empty or "totalShare" not in frame:
@@ -290,6 +327,19 @@ class BaoStockDataFetcher:
                 pd.DataFrame(rows).drop_duplicates(subset=["code"], keep="last").to_csv(path, index=False)
                 return total_share
         return 0.0
+
+    @staticmethod
+    def _call_with_timeout(callback, *, timeout_seconds: int, label: str):
+        def _raise_timeout(signum, frame):
+            raise TimeoutError(f"BaoStock request timed out: {label}")
+
+        previous = signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.alarm(timeout_seconds)
+        try:
+            return callback()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
 
 
 def _result_to_frame(result: Any) -> pd.DataFrame:
