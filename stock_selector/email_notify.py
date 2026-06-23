@@ -182,6 +182,9 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
 
 def _extract_email_body(report_text: str) -> str:
     lines = [
+        "【今日首选】",
+        *_extract_first_pick_summary(report_text),
+        "",
         "【今日前三】",
         *_extract_top3_summary(report_text),
         "",
@@ -197,28 +200,76 @@ def _extract_email_body(report_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _extract_first_pick_summary(report_text: str) -> list[str]:
+    candidates = _repeat_candidates(report_text)
+    if not candidates:
+        candidates = _top3_candidates(report_text)
+    if not candidates:
+        return ["股票代码：暂无", "股票名称：暂无", "推荐等级：普通观察", "推荐理由：今日无可选股票。"]
+    first_pick = sorted(
+        candidates,
+        key=lambda item: (
+            -item["list_count_5d"],
+            -item["continuous_days"],
+            -item["score"],
+            item["rank"],
+        ),
+    )[0]
+    level = _recommendation_level(first_pick)
+    reason = (
+        f"最近5日上榜 {first_pick['list_count_5d']} 次，连续上榜 {first_pick['continuous_days']} 天，"
+        f"今日排名第 {first_pick['rank']}，总评分 {first_pick['score']:.2f}。"
+    )
+    return [
+        f"股票代码：{first_pick['code']}",
+        f"股票名称：{first_pick['name']}",
+        f"推荐等级：{level}",
+        f"推荐理由：{reason}",
+    ]
+
+
 def _extract_top3_summary(report_text: str) -> list[str]:
-    section = _section_lines(report_text, "## 今日推荐3只主板股票")
-    rows = []
-    current_name = ""
-    current_code = ""
-    current_score = ""
-    for line in section:
-        if line.startswith("### "):
-            title = line.split(". ", 1)[-1]
-            current_name = title.split(" (", 1)[0]
-            current_code = title.rsplit("(", 1)[-1].rstrip(")") if "(" in title else ""
-            current_score = ""
-            continue
-        if line.startswith("- 最终评分："):
-            current_score = line.split("：", 1)[1]
-            if current_code:
-                rows.append(f"股票代码：{current_code}\n股票名称：{current_name}\n总评分：{current_score}")
+    rows = [
+        f"股票代码：{item['code']}\n股票名称：{item['name']}\n总评分：{item['score']:.2f}"
+        for item in _top3_candidates(report_text)
+    ]
     return rows or ["暂无今日前三数据。"]
 
 
 def _extract_repeat_summary(report_text: str) -> list[str]:
+    rows = [
+        f"股票代码：{item['code']}\n股票名称：{item['name']}\n上榜次数：{item['list_count_5d']}\n连续上榜天数：{item['continuous_days']}"
+        for item in _repeat_candidates(report_text)
+    ]
+    return rows[:10] or ["暂无重复上榜统计。"]
+
+
+def _top3_candidates(report_text: str) -> list[dict]:
+    section = _section_lines(report_text, "## 今日推荐3只主板股票")
+    rows = []
+    current: dict | None = None
+    for line in section:
+        if line.startswith("### "):
+            title = line.split(". ", 1)[-1]
+            rank_text = line.removeprefix("### ").split(".", 1)[0]
+            current = {
+                "rank": _safe_int(rank_text, fallback=99),
+                "name": title.split(" (", 1)[0],
+                "code": title.rsplit("(", 1)[-1].rstrip(")") if "(" in title else "",
+                "score": 0.0,
+                "list_count_5d": 1,
+                "continuous_days": 1,
+            }
+            rows.append(current)
+            continue
+        if current is not None and line.startswith("- 最终评分："):
+            current["score"] = _safe_float(line.split("：", 1)[1])
+    return [row for row in rows if row["code"]]
+
+
+def _repeat_candidates(report_text: str) -> list[dict]:
     section = _section_lines(report_text, "## 最近5日重复上榜观察池")
+    top3_by_code = {item["code"]: item for item in _top3_candidates(report_text)}
     rows = []
     for line in section:
         if not line.startswith("| ") or line.startswith("| ---") or "股票 | 今日排名" in line or "代码 | 名称" in line:
@@ -227,17 +278,58 @@ def _extract_repeat_summary(report_text: str) -> list[str]:
         if not cells or cells[0] == "暂无":
             continue
         if len(cells) >= 8:
-            rows.append(
-                f"股票代码：{cells[0]}\n股票名称：{cells[1]}\n上榜次数：{cells[3]}\n连续上榜天数：{cells[4]}"
-            )
-        elif len(cells) >= 4:
+            code = cells[0]
+            name = cells[1]
+            list_count = _safe_int(cells[3])
+            continuous = _safe_int(cells[4])
+            rank = _safe_int(cells[5], fallback=99)
+            score = _safe_float(cells[6])
+        elif len(cells) >= 5:
             stock_parts = cells[0].split(maxsplit=1)
             code = stock_parts[0]
             name = stock_parts[1] if len(stock_parts) > 1 else ""
-            rows.append(
-                f"股票代码：{code}\n股票名称：{name}\n上榜次数：{cells[3]}\n连续上榜天数：{cells[2]}"
-            )
-    return rows[:10] or ["暂无重复上榜统计。"]
+            rank = _safe_int(cells[1], fallback=99)
+            continuous = _safe_int(cells[2])
+            list_count = _safe_int(cells[3])
+            score = _safe_float(cells[4])
+        else:
+            continue
+        top3 = top3_by_code.get(code)
+        rows.append(
+            {
+                "code": code,
+                "name": name,
+                "rank": rank,
+                "score": score if score > 0 else (top3["score"] if top3 else 0.0),
+                "list_count_5d": list_count,
+                "continuous_days": continuous,
+            }
+        )
+    return rows
+
+
+def _recommendation_level(item: dict) -> str:
+    if item["list_count_5d"] >= 3:
+        return "强重点观察"
+    if item["list_count_5d"] == 2:
+        return "重点观察"
+    if item["list_count_5d"] == 1 and item["rank"] == 1:
+        return "短线观察"
+    return "普通观察"
+
+
+def _safe_int(value, *, fallback: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _extract_priority_summary(report_text: str) -> list[str]:

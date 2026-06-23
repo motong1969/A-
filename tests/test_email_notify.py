@@ -27,9 +27,10 @@ REPORT = """# 今日主板选股摘要: 2026-06-23
 
 ## 最近5日重复上榜观察池
 
-| 代码 | 名称 | 所属板块 | 5日上榜次数 | 连续上榜天数 | 最新排名 | 最新评分 | 操作建议 |
-| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| 600160 | 巨化股份 | C26化学原料和化学制品制造业 | 2 | 2 | 2 | 69.00 | 暂不操作 |
+| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 600160 巨化股份 | 2 | 2 | 2 | 69.00 | 暂不操作 |
+| 600183 生益科技 | 1 | 1 | 1 | 73.30 | 暂不操作 |
 
 今日优先观察股票：
 1. 暂无
@@ -53,6 +54,12 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
 
     assert message["Subject"] == "A股自动选股日报 2026-06-23"
     assert message["Message-ID"]
+    assert body.index("【今日首选】") < body.index("【今日前三】")
+    assert body.index("【今日前三】") < body.index("【最近5日重复上榜统计】")
+    assert "股票代码：600160" in body
+    assert "股票名称：巨化股份" in body
+    assert "推荐等级：重点观察" in body
+    assert "推荐理由：最近5日上榜 2 次，连续上榜 2 天，今日排名第 2，总评分 69.00。" in body
     assert "【今日前三】" in body
     assert "股票代码：600183" in body
     assert "股票名称：生益科技" in body
