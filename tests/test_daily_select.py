@@ -45,8 +45,9 @@ def test_render_today_stock_lists_top3_details() -> None:
     assert "- 止损位：" in report
     assert "- 风险等级：" in report
     assert "## 最近5日重复上榜观察池" in report
-    assert "代码 | 名称 | 所属板块 | 5日上榜次数" in report
-    assert "600001 | 样本1 | 人工智能 | 3 | 2 | 4 | 82.50 | 优先观察" in report
+    assert "股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数" in report
+    assert "600001 样本1 | 4 | 2 | 3 | 82.50 | 优先观察" in report
+    assert "最近5日最强股票：" in report
     assert "今日优先观察股票：" in report
     assert "1. 600001 样本1 - 优先观察" in report
 

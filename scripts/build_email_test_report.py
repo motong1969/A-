@@ -18,6 +18,7 @@ def main() -> int:
     top3 = frame.sort_values("rank").head(3)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(_render_report(top3, args.date), encoding="utf-8")
+    _repeat_pool(top3).to_csv(args.output.parent / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
     print(f"Email test report: {args.output}")
     return 0
 
@@ -51,17 +52,48 @@ def _render_report(top3: pd.DataFrame, report_date: str) -> str:
         [
             "## 最近5日重复上榜观察池",
             "",
-            "| 代码 | 名称 | 所属板块 | 5日上榜次数 | 连续上榜天数 | 最新排名 | 最新评分 | 操作建议 |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+            "| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |",
+            "| --- | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for row in top3.itertuples():
         lines.append(
-            f"| {str(row.code).zfill(6)} | {row.name} | {row.sector} | 1 | 1 | "
-            f"{int(row.rank)} | {float(row.score):.2f} | 暂不操作 |"
+            f"| {str(row.code).zfill(6)} {row.name} | {int(row.rank)} | 1 | 1 | "
+            f"{float(row.score):.2f} | 暂不操作 |"
         )
-    lines.extend(["", "今日优先观察股票：", "1. 暂无", "2. 暂无", "3. 暂无", ""])
+    strongest = top3.sort_values("rank").iloc[0]
+    lines.extend(
+        [
+            "",
+            "最近5日最强股票：",
+            f"{str(strongest['code']).zfill(6)} {strongest['name']}，最近5日出现 1 次，连续上榜 1 天，"
+            f"今日排名第 {int(strongest['rank'])}，最新评分 {float(strongest['score']):.2f}。",
+            "",
+            "今日优先观察股票：",
+            "1. 暂无",
+            "2. 暂无",
+            "3. 暂无",
+            "",
+        ]
+    )
     return "\n".join(lines)
+
+
+def _repeat_pool(top3: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "code": str(row.code).zfill(6),
+                "name": row.name,
+                "today_rank": int(row.rank),
+                "continuous_days": 1,
+                "list_count_5d": 1,
+                "latest_score": round(float(row.score), 2),
+                "advice": "暂不操作",
+            }
+            for row in top3.itertuples()
+        ]
+    )
 
 
 if __name__ == "__main__":

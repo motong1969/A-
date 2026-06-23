@@ -60,7 +60,15 @@ jobs:
 
       - name: Run selector
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
-        run: python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
+        run: |
+          set +e
+          timeout 300s python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "selector_status=$status" | tee reports/selector-status.log
+            python3 scripts/build_fallback_report.py --reason "选股超时或失败，已自动终止扫描，并使用已有数据生成降级报告。"
+          fi
 
       - name: Build Gmail test report
         if: github.event.inputs.email_test_only == 'true'
@@ -87,7 +95,7 @@ jobs:
         run: python3 scripts/send_daily_email.py --fail-on-error
 
       - name: Publish reports and history to daily-data
-        if: false
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

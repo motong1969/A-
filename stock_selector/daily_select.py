@@ -216,15 +216,25 @@ def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
     lines = [
         "## 最近5日重复上榜观察池",
         "",
-        "| 代码 | 名称 | 所属板块 | 5日上榜次数 | 连续上榜天数 | 最新排名 | 最新评分 | 操作建议 |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
     ]
     if not repeat_watch_pool:
-        lines.append("| 暂无 | 暂无 | 暂无 | 0 | 0 | - | - | 暂不操作 |")
+        lines.append("| 暂无 | - | 0 | 0 | - | 暂不操作 |")
     for item in repeat_watch_pool:
         lines.append(
-            "| {code} | {name} | {sector} | {list_count_5d} | {continuous_days} | "
-            "{latest_rank} | {latest_score:.2f} | {advice} |".format(**item)
+            "| {code} {name} | {latest_rank} | {continuous_days} | "
+            "{list_count_5d} | {latest_score:.2f} | {advice} |".format(**item)
+        )
+    strongest = _strongest_repeat_stock(repeat_watch_pool)
+    lines.extend(["", "最近5日最强股票："])
+    if strongest is None:
+        lines.append("暂无")
+    else:
+        lines.append(
+            f"{strongest['code']} {strongest['name']}，最近5日出现 {strongest['list_count_5d']} 次，"
+            f"连续上榜 {strongest['continuous_days']} 天，今日排名第 {strongest['latest_rank']}，"
+            f"最新评分 {strongest['latest_score']:.2f}。"
         )
     lines.extend(["", "今日优先观察股票："])
     priority_items = [item for item in repeat_watch_pool if item["advice"] in {"优先观察", "可低吸观察"}][:3]
@@ -236,6 +246,20 @@ def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
             lines.append(f"{index + 1}. 暂无")
     lines.append("")
     return lines
+
+
+def _strongest_repeat_stock(repeat_watch_pool: list[dict]) -> dict | None:
+    if not repeat_watch_pool:
+        return None
+    return sorted(
+        repeat_watch_pool,
+        key=lambda item: (
+            -item["list_count_5d"],
+            -item["continuous_days"],
+            item["latest_rank"],
+            -item["latest_score"],
+        ),
+    )[0]
 
 
 def main() -> int:
@@ -264,6 +288,7 @@ def main() -> int:
         run_date = date.fromisoformat(args.date)
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=run_date)
         repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=run_date)
+        pd.DataFrame(repeat_watch_pool).to_csv(args.output_dir / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
         today_stock = render_today_stock(result, repeat_watch_pool=repeat_watch_pool)
         today_stock_path.write_text(today_stock, encoding="utf-8")
         weekly_review_path = generate_weekly_review(as_of_date=run_date)

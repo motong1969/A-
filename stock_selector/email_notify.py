@@ -221,14 +221,22 @@ def _extract_repeat_summary(report_text: str) -> list[str]:
     section = _section_lines(report_text, "## 最近5日重复上榜观察池")
     rows = []
     for line in section:
-        if not line.startswith("| ") or line.startswith("| ---") or "代码 | 名称" in line:
+        if not line.startswith("| ") or line.startswith("| ---") or "股票 | 今日排名" in line or "代码 | 名称" in line:
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) < 8 or cells[0] == "暂无":
+        if not cells or cells[0] == "暂无":
             continue
-        rows.append(
-            f"股票代码：{cells[0]}\n股票名称：{cells[1]}\n上榜次数：{cells[3]}\n连续上榜天数：{cells[4]}"
-        )
+        if len(cells) >= 8:
+            rows.append(
+                f"股票代码：{cells[0]}\n股票名称：{cells[1]}\n上榜次数：{cells[3]}\n连续上榜天数：{cells[4]}"
+            )
+        elif len(cells) >= 4:
+            stock_parts = cells[0].split(maxsplit=1)
+            code = stock_parts[0]
+            name = stock_parts[1] if len(stock_parts) > 1 else ""
+            rows.append(
+                f"股票代码：{code}\n股票名称：{name}\n上榜次数：{cells[3]}\n连续上榜天数：{cells[2]}"
+            )
     return rows[:10] or ["暂无重复上榜统计。"]
 
 
