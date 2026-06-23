@@ -52,6 +52,7 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
     body = message.get_content()
 
     assert message["Subject"] == "A股自动选股日报 2026-06-23"
+    assert message["Message-ID"]
     assert "【今日前三】" in body
     assert "股票代码：600183" in body
     assert "股票名称：生益科技" in body

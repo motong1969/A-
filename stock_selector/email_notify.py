@@ -5,6 +5,7 @@ import smtplib
 from dataclasses import dataclass
 from datetime import date
 from email.message import EmailMessage
+from email.utils import make_msgid
 from pathlib import Path
 
 
@@ -26,6 +27,25 @@ class EmailSendResult:
     missing_secrets: tuple[str, ...]
     error: str
     log_text: str
+
+
+@dataclass(frozen=True)
+class SmtpSendDetails:
+    message_id: str
+    smtp_ehlo_code: int
+    smtp_ehlo_response: str
+    smtp_starttls_code: int
+    smtp_starttls_response: str
+    smtp_tls_ehlo_code: int
+    smtp_tls_ehlo_response: str
+    smtp_login_code: int
+    smtp_login_response: str
+    smtp_mail_code: int
+    smtp_mail_response: str
+    smtp_rcpt_code: int
+    smtp_rcpt_response: str
+    smtp_data_code: int
+    smtp_data_response: str
 
 
 def load_email_config_from_env() -> EmailConfig | None:
@@ -76,7 +96,7 @@ def send_today_stock_email_from_env(
             error=f"report not found: {report_path}",
         )
     try:
-        send_today_stock_email(report_path=report_path, trade_date=trade_date, config=config)
+        details = send_today_stock_email(report_path=report_path, trade_date=trade_date, config=config)
     except smtplib.SMTPAuthenticationError as exc:
         return _email_result(
             email_sent=False,
@@ -99,6 +119,7 @@ def send_today_stock_email_from_env(
         gmail_auth="success",
         missing_secrets=(),
         error="",
+        smtp_details=details,
     )
 
 
@@ -118,14 +139,35 @@ def send_today_stock_email(
     report_path: Path | str,
     trade_date: date,
     config: EmailConfig,
-) -> None:
+) -> SmtpSendDetails:
     report_file = Path(report_path)
     report_text = report_file.read_text(encoding="utf-8")
     message = build_today_stock_message(report_text=report_text, trade_date=trade_date, config=config)
     with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=20) as smtp:
-        smtp.starttls()
-        smtp.login(config.smtp_user, config.smtp_password)
-        smtp.send_message(message)
+        ehlo_code, ehlo_response = smtp.ehlo()
+        starttls_code, starttls_response = smtp.starttls()
+        tls_ehlo_code, tls_ehlo_response = smtp.ehlo()
+        login_code, login_response = smtp.login(config.smtp_user, config.smtp_password)
+        mail_code, mail_response = smtp.mail(config.mail_from)
+        rcpt_code, rcpt_response = smtp.rcpt(config.mail_to)
+        data_code, data_response = smtp.data(message.as_bytes())
+    return SmtpSendDetails(
+        message_id=str(message["Message-ID"]),
+        smtp_ehlo_code=ehlo_code,
+        smtp_ehlo_response=_decode_smtp_response(ehlo_response),
+        smtp_starttls_code=starttls_code,
+        smtp_starttls_response=_decode_smtp_response(starttls_response),
+        smtp_tls_ehlo_code=tls_ehlo_code,
+        smtp_tls_ehlo_response=_decode_smtp_response(tls_ehlo_response),
+        smtp_login_code=login_code,
+        smtp_login_response=_decode_smtp_response(login_response),
+        smtp_mail_code=mail_code,
+        smtp_mail_response=_decode_smtp_response(mail_response),
+        smtp_rcpt_code=rcpt_code,
+        smtp_rcpt_response=_decode_smtp_response(rcpt_response),
+        smtp_data_code=data_code,
+        smtp_data_response=_decode_smtp_response(data_response),
+    )
 
 
 def build_today_stock_message(*, report_text: str, trade_date: date, config: EmailConfig) -> EmailMessage:
@@ -133,6 +175,7 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
     message["Subject"] = f"A股自动选股日报 {trade_date.isoformat()}"
     message["From"] = config.mail_from
     message["To"] = config.mail_to
+    message["Message-ID"] = make_msgid(domain="github-actions.local")
     message.set_content(_extract_email_body(report_text))
     return message
 
@@ -230,6 +273,7 @@ def _email_result(
     gmail_auth: str,
     missing_secrets: tuple[str, ...],
     error: str,
+    smtp_details: SmtpSendDetails | None = None,
 ) -> EmailSendResult:
     lines = [
         f"email_sent={str(email_sent).lower()}",
@@ -238,6 +282,26 @@ def _email_result(
         f"missing_secrets={','.join(missing_secrets) if missing_secrets else 'none'}",
         f"error={error or 'none'}",
     ]
+    if smtp_details is not None:
+        lines.extend(
+            [
+                f"message_id={smtp_details.message_id}",
+                f"smtp_ehlo_code={smtp_details.smtp_ehlo_code}",
+                f"smtp_ehlo_response={smtp_details.smtp_ehlo_response}",
+                f"smtp_starttls_code={smtp_details.smtp_starttls_code}",
+                f"smtp_starttls_response={smtp_details.smtp_starttls_response}",
+                f"smtp_tls_ehlo_code={smtp_details.smtp_tls_ehlo_code}",
+                f"smtp_tls_ehlo_response={smtp_details.smtp_tls_ehlo_response}",
+                f"smtp_login_code={smtp_details.smtp_login_code}",
+                f"smtp_login_response={smtp_details.smtp_login_response}",
+                f"smtp_mail_code={smtp_details.smtp_mail_code}",
+                f"smtp_mail_response={smtp_details.smtp_mail_response}",
+                f"smtp_rcpt_code={smtp_details.smtp_rcpt_code}",
+                f"smtp_rcpt_response={smtp_details.smtp_rcpt_response}",
+                f"smtp_data_code={smtp_details.smtp_data_code}",
+                f"smtp_data_response={smtp_details.smtp_data_response}",
+            ]
+        )
     return EmailSendResult(
         email_sent=email_sent,
         smtp_connection=smtp_connection,
@@ -246,3 +310,9 @@ def _email_result(
         error=error,
         log_text="\n".join(lines) + "\n",
     )
+
+
+def _decode_smtp_response(response) -> str:
+    if isinstance(response, bytes):
+        return response.decode("utf-8", errors="replace").replace("\n", "\\n")
+    return str(response).replace("\n", "\\n")
