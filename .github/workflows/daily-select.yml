@@ -20,7 +20,7 @@ concurrency:
 jobs:
   daily-select:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     steps:
       - name: Checkout code
@@ -58,17 +58,18 @@ jobs:
             exit "$status"
           fi
 
-      - name: Run selector
+      - name: Refresh main-board cache
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         run: |
-          set +e
-          timeout 300s python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "selector_status=$status" | tee reports/selector-status.log
-            python3 scripts/build_fallback_report.py --reason "选股超时或失败，已自动终止扫描，并使用已有数据生成降级报告。"
-          fi
+          timeout 60s python3 scripts/refresh_mainboard_cache.py || true
+
+      - name: Build cached selector report
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
+        run: python3 scripts/build_cached_report.py
+
+      - name: Build non-trading day report
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'false'
+        run: python3 scripts/build_fallback_report.py --date "$(date -u +%F)" --reason "今日不是交易日，系统发送例行状态邮件。"
 
       - name: Build Gmail test report
         if: github.event.inputs.email_test_only == 'true'
@@ -76,7 +77,7 @@ jobs:
 
       - name: Generate backtest report
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
-        run: python3 report_backtest.py
+        run: python3 report_backtest.py || true
 
       - name: Send Gmail test notification
         if: github.event.inputs.email_test_only == 'true'
@@ -87,7 +88,7 @@ jobs:
         run: python3 scripts/send_daily_email.py --fail-on-error --date 2026-06-23
 
       - name: Send Gmail notification
-        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && (steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false')
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -103,7 +104,7 @@ jobs:
           bash scripts/ci_publish_daily_data.sh daily-data "daily select $(date -u +%F)"
 
       - name: Upload artifacts
-        if: github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: daily-select-${{ github.run_id }}

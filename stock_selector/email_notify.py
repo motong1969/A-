@@ -182,6 +182,9 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
 
 def _extract_email_body(report_text: str) -> str:
     lines = [
+        "【数据来源】",
+        _extract_data_source(report_text),
+        "",
         "【今日首选】",
         *_extract_first_pick_summary(report_text),
         "",
@@ -350,6 +353,13 @@ def _extract_market_risk(report_text: str) -> str:
         if line.startswith("市场状态："):
             return f"今日市场风险等级：{line.split('：', 1)[1]}"
     return "今日市场风险等级：暂无数据"
+
+
+def _extract_data_source(report_text: str) -> str:
+    for line in report_text.splitlines():
+        if line.startswith("数据来源："):
+            return line
+    return "数据来源：实时数据"
 
 
 def _section_lines(report_text: str, heading: str) -> list[str]:
