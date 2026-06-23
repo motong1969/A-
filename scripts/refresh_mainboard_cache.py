@@ -5,7 +5,7 @@ import argparse
 from datetime import date
 from pathlib import Path
 
-from stock_selector.data.baostock import BaoStockDataFetcher
+from stock_selector.data.baostock import BaoStockDataFetcher, _result_to_frame
 
 
 def main() -> int:
@@ -22,10 +22,15 @@ def main() -> int:
     try:
         fetcher = BaoStockDataFetcher()
         try:
-            frame = fetcher._query_all_stock_with_fallback(run_date)
+            frame = fetcher._call_with_timeout(
+                lambda: _result_to_frame(fetcher.client.query_all_stock(day=run_date.isoformat())),
+                timeout_seconds=5,
+                label=f"query_all_stock({run_date.isoformat()})",
+            )
         finally:
             fetcher.close()
         if not frame.empty:
+            frame = frame[frame["code"].astype(str).map(_is_main_board_code)].copy()
             frame.to_csv(cache_path, index=False, encoding="utf-8-sig")
             status_path.write_text("实时数据\n", encoding="utf-8")
             print(f"data_source=实时数据")
@@ -45,6 +50,11 @@ def main() -> int:
     print("data_source=降级报告")
     print("mainboard_cache=none")
     return 0
+
+
+def _is_main_board_code(code: str) -> bool:
+    normalized = str(code).lower()
+    return normalized.startswith(("sh.600", "sh.601", "sh.603", "sh.605", "sz.000", "sz.001", "sz.002"))
 
 
 def _latest_cache(output_dir: Path) -> Path | None:
