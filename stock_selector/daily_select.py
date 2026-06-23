@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 from datetime import date
 from pathlib import Path
@@ -8,7 +10,7 @@ import pandas as pd
 from stock_selector.akshare_engine import AkShareSelectionResult, AkShareV1Engine
 from stock_selector.data.baostock import BaoStockDataFetcher
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
-from stock_selector.history_validation import generate_weekly_review, update_selection_history
+from stock_selector.history_validation import build_repeat_watch_pool, generate_weekly_review, update_selection_history
 
 
 def _raise_run_timeout(signum, frame):
@@ -165,7 +167,7 @@ def _risk_level_for_candidate(item, market_status: str) -> str:
     return "中" if market_status == "可交易" else "高"
 
 
-def render_today_stock(result: AkShareSelectionResult) -> str:
+def render_today_stock(result: AkShareSelectionResult, repeat_watch_pool: list[dict] | None = None) -> str:
     best_score = result.best.score if result.best else None
     has_high_confidence = best_score is not None and best_score >= 75
     lines = [
@@ -189,6 +191,7 @@ def render_today_stock(result: AkShareSelectionResult) -> str:
                 "今日无入选股票。",
             ]
         )
+        lines.extend(_repeat_watch_pool_lines(repeat_watch_pool or []))
         return "\n".join(lines) + "\n"
 
     lines.extend(["## 今日推荐3只主板股票", ""])
@@ -205,7 +208,34 @@ def render_today_stock(result: AkShareSelectionResult) -> str:
                 "",
             ]
         )
+    lines.extend(_repeat_watch_pool_lines(repeat_watch_pool or []))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
+    lines = [
+        "## 最近5日重复上榜观察池",
+        "",
+        "| 代码 | 名称 | 所属板块 | 5日上榜次数 | 连续上榜天数 | 最新排名 | 最新评分 | 操作建议 |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    if not repeat_watch_pool:
+        lines.append("| 暂无 | 暂无 | 暂无 | 0 | 0 | - | - | 暂不操作 |")
+    for item in repeat_watch_pool:
+        lines.append(
+            "| {code} | {name} | {sector} | {list_count_5d} | {continuous_days} | "
+            "{latest_rank} | {latest_score:.2f} | {advice} |".format(**item)
+        )
+    lines.extend(["", "今日优先观察股票："])
+    priority_items = [item for item in repeat_watch_pool if item["advice"] in {"优先观察", "可低吸观察"}][:3]
+    for index in range(3):
+        if index < len(priority_items):
+            item = priority_items[index]
+            lines.append(f"{index + 1}. {item['code']} {item['name']} - {item['advice']}")
+        else:
+            lines.append(f"{index + 1}. 暂无")
+    lines.append("")
+    return lines
 
 
 def main() -> None:
@@ -225,16 +255,17 @@ def main() -> None:
             date.fromisoformat(args.date), limit=args.limit
         )
         report = render_result(result)
-        today_stock = render_today_stock(result)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         report_path = args.output_dir / f"{args.mode}-scan-{args.date}.md"
         pool_path = args.output_dir / f"{args.mode}-top10-{args.date}.csv"
         today_stock_path = args.output_dir / "today_stock.md"
         report_path.write_text(report, encoding="utf-8")
-        today_stock_path.write_text(today_stock, encoding="utf-8")
         pd.DataFrame(_candidate_rows(result, result.top20)).to_csv(pool_path, index=False, encoding="utf-8-sig")
         run_date = date.fromisoformat(args.date)
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=run_date)
+        repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=run_date)
+        today_stock = render_today_stock(result, repeat_watch_pool=repeat_watch_pool)
+        today_stock_path.write_text(today_stock, encoding="utf-8")
         weekly_review_path = generate_weekly_review(as_of_date=run_date)
         print(report)
         print(f"Top10 CSV: {pool_path}")

@@ -6,6 +6,7 @@ import pandas as pd
 from stock_selector.akshare_engine import AkShareV1Engine
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
 from stock_selector.history_validation import (
+    build_repeat_watch_pool,
     generate_backtest_report,
     generate_weekly_review,
     update_selection_history,
@@ -159,3 +160,59 @@ def test_generate_weekly_review_skips_non_friday(tmp_path: Path) -> None:
     )
 
     assert weekly_path is None
+
+
+def test_build_repeat_watch_pool_counts_recent_five_trading_days(tmp_path: Path) -> None:
+    history_path = tmp_path / "history" / "selection_history.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        _history_row("2026-06-16", 1, "600999", "过期样本", 80),
+        _history_row("2026-06-17", 2, "600001", "样本1", 78),
+        _history_row("2026-06-18", 4, "600001", "样本1", 79),
+        _history_row("2026-06-19", 3, "600001", "样本1", 80),
+        _history_row("2026-06-23", 2, "600001", "样本1", 82),
+        _history_row("2026-06-24", 1, "600001", "样本1", 83),
+        _history_row("2026-06-23", 4, "600002", "样本2", 86),
+        _history_row("2026-06-24", 6, "600002", "样本2", 82),
+        _history_row("2026-06-24", 8, "600003", "样本3", 77),
+    ]
+    pd.DataFrame(rows).to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    pool = build_repeat_watch_pool(history_path=history_path, as_of_date=date(2026, 6, 24))
+
+    first = next(item for item in pool if item["code"] == "600001")
+    cautious = next(item for item in pool if item["code"] == "600002")
+    single = next(item for item in pool if item["code"] == "600003")
+    assert first["list_count_5d"] == 5
+    assert first["continuous_days"] == 5
+    assert first["latest_rank"] == 1
+    assert first["latest_score"] == 83
+    assert first["advice"] == "优先观察"
+    assert cautious["advice"] == "谨慎观察"
+    assert single["advice"] == "暂不操作"
+    assert "600999" not in {item["code"] for item in pool}
+
+
+def _history_row(day: str, rank: int, code: str, name: str, score: float) -> dict:
+    return {
+        "date": day,
+        "rank": rank,
+        "code": code,
+        "name": name,
+        "sector": "人工智能",
+        "score": score,
+        "close_price": 10.0,
+        "ma20_score": 8.0,
+        "ma_score": 7.0,
+        "volume_score": 6.0,
+        "breakout_score": 5.0,
+        "risk_score": -1.0,
+        "market_cap_score": 2.0,
+        "sector_heat_bonus": 3.0,
+        "next_day_return": pd.NA,
+        "return_3d": pd.NA,
+        "return_5d": pd.NA,
+        "return_10d": pd.NA,
+        "max_gain_5d": pd.NA,
+        "max_drawdown_5d": pd.NA,
+    }

@@ -21,7 +21,21 @@ class LowLiquidityFetcher(MockAkShareDataFetcher):
 def test_render_today_stock_lists_top3_details() -> None:
     result = AkShareV1Engine(fetcher=MockAkShareDataFetcher()).run(date(2026, 6, 2))
 
-    report = render_today_stock(result)
+    report = render_today_stock(
+        result,
+        repeat_watch_pool=[
+            {
+                "code": "600001",
+                "name": "样本1",
+                "sector": "人工智能",
+                "list_count_5d": 3,
+                "continuous_days": 2,
+                "latest_rank": 4,
+                "latest_score": 82.5,
+                "advice": "优先观察",
+            }
+        ],
+    )
 
     assert "# 今日主板选股摘要: 2026-06-02" in report
     assert "## 今日推荐3只主板股票" in report
@@ -30,6 +44,11 @@ def test_render_today_stock_lists_top3_details() -> None:
     assert "- 买入区间：" in report
     assert "- 止损位：" in report
     assert "- 风险等级：" in report
+    assert "## 最近5日重复上榜观察池" in report
+    assert "代码 | 名称 | 所属板块 | 5日上榜次数" in report
+    assert "600001 | 样本1 | 人工智能 | 3 | 2 | 4 | 82.50 | 优先观察" in report
+    assert "今日优先观察股票：" in report
+    assert "1. 600001 样本1 - 优先观察" in report
 
 
 def test_render_today_stock_preserves_empty_position_message() -> None:
@@ -39,3 +58,4 @@ def test_render_today_stock_preserves_empty_position_message() -> None:
 
     assert "结论：今日无高确定性机会，建议空仓观察。" in report
     assert "今日无入选股票。" in report
+    assert "## 最近5日重复上榜观察池" in report

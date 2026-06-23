@@ -99,6 +99,66 @@ def generate_weekly_review(
     return target
 
 
+def build_repeat_watch_pool(
+    history_path: Path | str = Path("history/selection_history.csv"),
+    *,
+    as_of_date: date | None = None,
+    window_days: int = 5,
+) -> list[dict]:
+    history = _load_history(Path(history_path))
+    if history.empty:
+        return []
+    history = history[~history["name"].astype(str).str.contains("模拟", na=False)].copy()
+    if history.empty:
+        return []
+    scan_date = as_of_date or date.today()
+    eligible_dates = sorted({day for day in history["date"].dropna().unique() if day <= scan_date}, reverse=True)
+    recent_dates = eligible_dates[:window_days]
+    if not recent_dates:
+        return []
+    recent = history[history["date"].isin(recent_dates)].copy()
+    rows = []
+    for code, group in recent.groupby("code"):
+        ranked = group.sort_values(["date", "rank"], ascending=[False, True]).reset_index(drop=True)
+        latest = ranked.iloc[0]
+        previous = ranked.iloc[1] if len(ranked) > 1 else None
+        list_count = int(ranked["date"].nunique())
+        continuous_days = _continuous_listed_days(code, recent, recent_dates)
+        score_rising = previous is not None and _numeric(latest["score"]) > _numeric(previous["score"])
+        score_falling = previous is not None and _numeric(latest["score"]) < _numeric(previous["score"])
+        rank_moved_back = previous is not None and _numeric(latest["rank"]) > _numeric(previous["rank"])
+        advice = _repeat_watch_advice(
+            list_count=list_count,
+            continuous_days=continuous_days,
+            latest_rank=int(latest["rank"]),
+            score_rising=score_rising,
+            score_falling=score_falling,
+            rank_moved_back=rank_moved_back,
+        )
+        rows.append(
+            {
+                "code": str(code).zfill(6),
+                "name": latest["name"],
+                "sector": latest["sector"],
+                "list_count_5d": list_count,
+                "continuous_days": continuous_days,
+                "latest_rank": int(latest["rank"]),
+                "latest_score": round(float(latest["score"]), 2),
+                "advice": advice,
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            -item["list_count_5d"],
+            -item["continuous_days"],
+            item["latest_rank"],
+            -item["latest_score"],
+            item["code"],
+        ),
+    )
+
+
 def _load_history(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=HISTORY_COLUMNS)
@@ -212,6 +272,50 @@ def _backfill_returns(history: pd.DataFrame, *, fetcher, as_of_date: date) -> pd
                     if pd.isna(updated.at[row_index, "max_drawdown_5d"]):
                         updated.at[row_index, "max_drawdown_5d"] = round(min(five_day_closes) / base_close - 1, 6)
     return updated.sort_values(["date", "rank"], ascending=[False, True]).reset_index(drop=True)
+
+
+def _continuous_listed_days(code: str, recent: pd.DataFrame, recent_dates: list[date]) -> int:
+    code_dates = set(recent[recent["code"].astype(str).str.zfill(6) == str(code).zfill(6)]["date"])
+    latest_listed_date = next((day for day in recent_dates if day in code_dates), None)
+    if latest_listed_date is None:
+        return 0
+    started = False
+    count = 0
+    for trade_day in recent_dates:
+        if trade_day == latest_listed_date:
+            started = True
+        if not started:
+            continue
+        if trade_day not in code_dates:
+            break
+        count += 1
+    return count
+
+
+def _repeat_watch_advice(
+    *,
+    list_count: int,
+    continuous_days: int,
+    latest_rank: int,
+    score_rising: bool,
+    score_falling: bool,
+    rank_moved_back: bool,
+) -> str:
+    if score_falling and rank_moved_back:
+        return "谨慎观察"
+    if list_count >= 3 and latest_rank <= 5:
+        return "优先观察"
+    if continuous_days >= 2 and score_rising:
+        return "可低吸观察"
+    if list_count == 1:
+        return "暂不操作"
+    return "暂不操作"
+
+
+def _numeric(value) -> float:
+    if pd.isna(value):
+        return 0.0
+    return float(value)
 
 
 def _render_backtest_report(history: pd.DataFrame) -> str:
