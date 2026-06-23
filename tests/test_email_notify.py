@@ -10,6 +10,7 @@ from stock_selector.email_notify import (
 
 REPORT = """# 今日主板选股摘要: 2026-06-23
 
+数据来源：实时数据
 市场状态：谨慎
 市场评分：51.94/100
 
@@ -71,6 +72,26 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
     assert "连续上榜天数：2" in body
     assert "【系统建议】" in body
     assert "今日市场风险等级：谨慎" in body
+
+
+def test_cached_source_uses_degraded_subject_and_watchlist() -> None:
+    config = EmailConfig(
+        smtp_host="smtp.gmail.com",
+        smtp_port=587,
+        smtp_user="sender@gmail.com",
+        smtp_password="password",
+        mail_to="target@gmail.com",
+        mail_from="sender@gmail.com",
+    )
+    cached_report = REPORT.replace("数据来源：实时数据", "数据来源：缓存数据")
+
+    message = build_today_stock_message(report_text=cached_report, trade_date=date(2026, 6, 23), config=config)
+    body = message.get_content()
+
+    assert message["Subject"] == "【缓存降级】A股自动选股日报 2026-06-23"
+    assert "【观察名单】" in body
+    assert "【今日首选】" not in body
+    assert "仅观察" in body
 
 
 def test_missing_email_secrets_are_reported(monkeypatch) -> None:

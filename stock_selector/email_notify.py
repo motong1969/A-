@@ -172,7 +172,8 @@ def send_today_stock_email(
 
 def build_today_stock_message(*, report_text: str, trade_date: date, config: EmailConfig) -> EmailMessage:
     message = EmailMessage()
-    message["Subject"] = f"A股自动选股日报 {trade_date.isoformat()}"
+    subject_prefix = "【缓存降级】" if _is_degraded_source(report_text) else ""
+    message["Subject"] = f"{subject_prefix}A股自动选股日报 {trade_date.isoformat()}"
     message["From"] = config.mail_from
     message["To"] = config.mail_to
     message["Message-ID"] = make_msgid(domain="github-actions.local")
@@ -181,25 +182,26 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
 
 
 def _extract_email_body(report_text: str) -> str:
-    lines = [
-        "【数据来源】",
-        _extract_data_source(report_text),
-        "",
-        "【今日首选】",
-        *_extract_first_pick_summary(report_text),
-        "",
-        "【今日前三】",
-        *_extract_top3_summary(report_text),
-        "",
-        "【最近5日重复上榜统计】",
-        *_extract_repeat_summary(report_text),
-        "",
-        "【系统建议】",
-        *_extract_priority_summary(report_text),
-        "",
-        "【风险提示】",
-        _extract_market_risk(report_text),
-    ]
+    lines = ["【数据来源】", _extract_data_source(report_text), ""]
+    if _is_degraded_source(report_text):
+        lines.extend(["【观察名单】", *_extract_watchlist_summary(report_text), ""])
+    else:
+        lines.extend(["【今日首选】", *_extract_first_pick_summary(report_text), ""])
+    lines.extend(
+        [
+            "【今日前三】",
+            *_extract_top3_summary(report_text),
+            "",
+            "【最近5日重复上榜统计】",
+            *_extract_repeat_summary(report_text),
+            "",
+            "【系统建议】",
+            *_extract_priority_summary(report_text),
+            "",
+            "【风险提示】",
+            _extract_market_risk(report_text),
+        ]
+    )
     return "\n".join(lines).strip()
 
 
@@ -348,6 +350,20 @@ def _extract_priority_summary(report_text: str) -> list[str]:
     return rows[:3] or ["1. 暂无", "2. 暂无", "3. 暂无"]
 
 
+def _extract_watchlist_summary(report_text: str) -> list[str]:
+    candidates = _repeat_candidates(report_text) or _top3_candidates(report_text)
+    if not candidates:
+        return ["暂无观察股票。"]
+    rows = []
+    for index, item in enumerate(candidates[:3], start=1):
+        rows.append(
+            f"{index}. {item['code']} {item['name']}，今日排名第 {item['rank']}，"
+            f"最近5日出现 {item['list_count_5d']} 次，连续上榜 {item['continuous_days']} 天，"
+            f"总评分 {item['score']:.2f}，仅观察。"
+        )
+    return rows
+
+
 def _extract_market_risk(report_text: str) -> str:
     for line in report_text.splitlines():
         if line.startswith("市场状态："):
@@ -360,6 +376,10 @@ def _extract_data_source(report_text: str) -> str:
         if line.startswith("数据来源："):
             return line
     return "数据来源：实时数据"
+
+
+def _is_degraded_source(report_text: str) -> bool:
+    return _extract_data_source(report_text) != "数据来源：实时数据"
 
 
 def _section_lines(report_text: str, heading: str) -> list[str]:

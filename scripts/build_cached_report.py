@@ -33,6 +33,7 @@ def main() -> int:
         print(f"data_source={source}")
         return 0
 
+    source = "缓存数据"
     frame = pd.read_csv(csv_path)
     top3 = frame.sort_values("rank").head(3)
     output_path.write_text(_render_report(top3, args.date, source, csv_path.name), encoding="utf-8")
