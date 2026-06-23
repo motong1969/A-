@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "10 8 * * 1-5"
   workflow_dispatch:
+    inputs:
+      email_test_only:
+        description: "Only send a Gmail test using the saved 2026-06-23 report fixture"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -34,9 +39,11 @@ jobs:
           python -m pip install -e .
 
       - name: Restore reports and history from daily-data
+        if: github.event.inputs.email_test_only != 'true'
         run: bash scripts/ci_restore_daily_data.sh daily-data
 
       - name: Check trading day
+        if: github.event.inputs.email_test_only != 'true'
         id: trading_day
         run: |
           set +e
@@ -52,15 +59,27 @@ jobs:
           fi
 
       - name: Run selector
-        if: steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         run: python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
 
+      - name: Build Gmail test report
+        if: github.event.inputs.email_test_only == 'true'
+        run: python3 scripts/build_email_test_report.py --date 2026-06-23
+
       - name: Generate backtest report
-        if: steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         run: python3 report_backtest.py
 
+      - name: Send Gmail test notification
+        if: github.event.inputs.email_test_only == 'true'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python3 scripts/send_daily_email.py --fail-on-error --date 2026-06-23
+
       - name: Send Gmail notification
-        if: steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -68,7 +87,7 @@ jobs:
         run: python3 scripts/send_daily_email.py --fail-on-error
 
       - name: Publish reports and history to daily-data
-        if: steps.trading_day.outputs.is_trading_day == 'true'
+        if: false
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +95,7 @@ jobs:
           bash scripts/ci_publish_daily_data.sh daily-data "daily select $(date -u +%F)"
 
       - name: Upload artifacts
-        if: steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: daily-select-${{ github.run_id }}
