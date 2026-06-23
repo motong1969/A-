@@ -140,6 +140,7 @@ GitHub Actions 会执行：
 python3 scripts/check_trading_day.py
 python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
 python3 report_backtest.py
+python3 scripts/send_daily_email.py
 ```
 
 其中：
@@ -148,6 +149,42 @@ python3 report_backtest.py
 - `scripts/ci_publish_daily_data.sh` 会在运行后把新的 `reports/` 和 `history/` 推送回 `daily-data`
 
 首次启用前，需将仓库推送到 GitHub，并保证 Actions 具有 `contents: write` 权限。
+
+### Gmail 邮件通知
+
+每日云端运行生成 `reports/today_stock.md` 后，会执行 `scripts/send_daily_email.py`，
+将日报发送到指定 Gmail 邮箱，并在 `reports/email-send-YYYY-MM-DD.log` 记录发送状态。
+
+需要在 GitHub 仓库配置以下 Actions Secrets：
+
+| Secret 名称 | 填写内容 |
+| --- | --- |
+| `GMAIL_USER` | 发件 Gmail 地址，例如 `yourname@gmail.com` |
+| `GMAIL_APP_PASSWORD` | Gmail App Password，16 位应用专用密码，不是 Gmail 登录密码 |
+| `MAIL_TO` | 收件 Gmail 地址，可以与 `GMAIL_USER` 相同 |
+
+获取 Gmail App Password：
+
+1. 登录 Google 账户，进入 `https://myaccount.google.com/security`。
+2. 先开启两步验证。
+3. 进入 `App passwords`，应用选择 `Mail`，设备可填 `GitHub Actions`。
+4. 复制 Google 生成的 16 位应用专用密码，填入 `GMAIL_APP_PASSWORD`。
+
+配置 GitHub Secrets：
+
+1. 打开 GitHub 仓库。
+2. 进入 `Settings` -> `Secrets and variables` -> `Actions`。
+3. 点击 `New repository secret`。
+4. 分别新增 `GMAIL_USER`、`GMAIL_APP_PASSWORD`、`MAIL_TO`。
+
+如果缺少任一 Secret，邮件脚本不会中断选股流程，会在日志中输出缺失项：
+
+```text
+email_sent=false
+smtp_connection=not_attempted
+gmail_auth=not_attempted
+missing_secrets=GMAIL_USER,GMAIL_APP_PASSWORD,MAIL_TO
+```
 
 ## BaoStock 接口
 

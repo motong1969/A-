@@ -59,6 +59,14 @@ jobs:
         if: steps.trading_day.outputs.is_trading_day == 'true'
         run: python3 report_backtest.py
 
+      - name: Send Gmail notification
+        if: steps.trading_day.outputs.is_trading_day == 'true'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python3 scripts/send_daily_email.py
+
       - name: Publish reports and history to daily-data
         if: steps.trading_day.outputs.is_trading_day == 'true'
         run: |
