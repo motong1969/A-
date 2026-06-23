@@ -8,6 +8,16 @@ import pandas as pd
 from stock_selector.akshare_engine import AkShareCandidate, AkShareSelectionResult
 
 
+FACTOR_COLUMNS = [
+    "ma20_score",
+    "ma_score",
+    "volume_score",
+    "breakout_score",
+    "risk_score",
+    "market_cap_score",
+    "sector_heat_bonus",
+]
+
 HISTORY_COLUMNS = [
     "date",
     "rank",
@@ -16,10 +26,13 @@ HISTORY_COLUMNS = [
     "sector",
     "score",
     "close_price",
+    *FACTOR_COLUMNS,
     "next_day_return",
     "return_3d",
     "return_5d",
     "return_10d",
+    "max_gain_5d",
+    "max_drawdown_5d",
 ]
 
 RETURN_COLUMN_TO_OFFSET = {
@@ -28,6 +41,12 @@ RETURN_COLUMN_TO_OFFSET = {
     "return_5d": 5,
     "return_10d": 10,
 }
+
+PERFORMANCE_COLUMNS = [
+    *RETURN_COLUMN_TO_OFFSET,
+    "max_gain_5d",
+    "max_drawdown_5d",
+]
 
 
 def update_selection_history(
@@ -64,6 +83,22 @@ def generate_backtest_report(
     return report
 
 
+def generate_weekly_review(
+    history_path: Path | str = Path("history/selection_history.csv"),
+    *,
+    output_dir: Path | str = Path("reports"),
+    as_of_date: date | None = None,
+) -> Path | None:
+    review_date = as_of_date or date.today()
+    if review_date.weekday() != 4:
+        return None
+    history = _load_history(Path(history_path))
+    target = Path(output_dir) / f"weekly-review-{review_date.isoformat()}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_render_weekly_review(history, review_date), encoding="utf-8")
+    return target
+
+
 def _load_history(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=HISTORY_COLUMNS)
@@ -75,7 +110,7 @@ def _load_history(path: Path) -> pd.DataFrame:
     if not frame.empty:
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
         frame["rank"] = pd.to_numeric(frame["rank"], errors="coerce").astype("Int64")
-        for column in ("score", "close_price", *RETURN_COLUMN_TO_OFFSET):
+        for column in ("score", "close_price", *FACTOR_COLUMNS, *PERFORMANCE_COLUMNS):
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
         frame["code"] = frame["code"].astype(str).str.zfill(6)
         frame = frame.sort_values(["date", "rank"], ascending=[False, True]).reset_index(drop=True)
@@ -98,10 +133,19 @@ def _upsert_daily_selection(
                 "sector": item.sector,
                 "score": round(item.score, 2),
                 "close_price": round(item.close, 4),
+                "ma20_score": round(item.ma20_score, 4),
+                "ma_score": round(item.ma_score, 4),
+                "volume_score": round(item.volume_score, 4),
+                "breakout_score": round(item.breakout_score, 4),
+                "risk_score": round(item.risk_score, 4),
+                "market_cap_score": round(item.market_cap_score, 4),
+                "sector_heat_bonus": round(item.sector_heat_bonus, 4),
                 "next_day_return": pd.NA,
                 "return_3d": pd.NA,
                 "return_5d": pd.NA,
                 "return_10d": pd.NA,
+                "max_gain_5d": pd.NA,
+                "max_drawdown_5d": pd.NA,
             }
         )
     current = pd.DataFrame(rows, columns=HISTORY_COLUMNS)
@@ -116,7 +160,7 @@ def _backfill_returns(history: pd.DataFrame, *, fetcher, as_of_date: date) -> pd
     if history.empty:
         return history
     updated = history.copy()
-    pending_mask = updated[list(RETURN_COLUMN_TO_OFFSET)].isna().any(axis=1)
+    pending_mask = updated[PERFORMANCE_COLUMNS].isna().any(axis=1)
     pending = updated[pending_mask]
     if pending.empty:
         return updated
@@ -160,6 +204,13 @@ def _backfill_returns(history: pd.DataFrame, *, fetcher, as_of_date: date) -> pd
                 if future_close is None:
                     continue
                 updated.at[row_index, column] = round(future_close / base_close - 1, 6)
+            if len(future_dates) >= 5:
+                five_day_closes = [close_map[trade_date] for trade_date in future_dates[:5] if trade_date in close_map]
+                if len(five_day_closes) == 5:
+                    if pd.isna(updated.at[row_index, "max_gain_5d"]):
+                        updated.at[row_index, "max_gain_5d"] = round(max(five_day_closes) / base_close - 1, 6)
+                    if pd.isna(updated.at[row_index, "max_drawdown_5d"]):
+                        updated.at[row_index, "max_drawdown_5d"] = round(min(five_day_closes) / base_close - 1, 6)
     return updated.sort_values(["date", "rank"], ascending=[False, True]).reset_index(drop=True)
 
 
@@ -222,3 +273,166 @@ def _format_return_stats(frame: pd.DataFrame) -> list[str]:
             continue
         lines.append(f"- {column}: 平均收益 {series.mean():.2%}，样本 {len(series)}")
     return lines
+
+
+def _render_weekly_review(history: pd.DataFrame, review_date: date) -> str:
+    week_start = review_date - pd.Timedelta(days=review_date.weekday())
+    week_start = week_start.date() if hasattr(week_start, "date") else week_start
+    weekly = history[(history["date"] >= week_start) & (history["date"] <= review_date)].copy()
+    top3 = weekly[weekly["rank"].between(1, 3, inclusive="both")].sort_values(["date", "rank"])
+
+    lines = [f"# 一周验证总结: {review_date.isoformat()}", ""]
+    lines.extend(_weekly_top3_lines(top3))
+    lines.append("")
+    lines.extend(_weekly_performance_lines(top3))
+    lines.append("")
+    lines.extend(_weekly_average_lines(top3))
+    lines.append("")
+    lines.extend(_weekly_win_rate_lines(top3))
+    lines.append("")
+    lines.extend(_weekly_drawdown_lines(top3))
+    lines.append("")
+    effective_factor = _most_effective_factor(top3)
+    lines.extend(_weekly_factor_lines(effective_factor))
+    lines.append("")
+    lines.extend(_weekly_false_strength_lines(top3))
+    lines.append("")
+    lines.extend(_weekly_conclusion_lines(top3, effective_factor))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _weekly_top3_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 本周每天前三名", ""]
+    if top3.empty:
+        return lines + ["暂无本周前三名记录。"]
+    for row in top3.itertuples():
+        lines.append(
+            f"- {row.date} 第{int(row.rank)}名: {row.code} {row.name}，"
+            f"板块 {row.sector}，评分 {float(row.score):.2f}"
+        )
+    return lines
+
+
+def _weekly_performance_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 每只股票后续表现", ""]
+    if top3.empty:
+        return lines + ["暂无可验证股票。"]
+    for row in top3.itertuples():
+        lines.append(
+            f"- {row.date} 第{int(row.rank)}名 {row.code} {row.name}: "
+            f"次日 {_format_pct(row.next_day_return)}，"
+            f"3日 {_format_pct(row.return_3d)}，"
+            f"5日 {_format_pct(row.return_5d)}，"
+            f"最大涨幅 {_format_pct(row.max_gain_5d)}，"
+            f"最大回撤 {_format_pct(row.max_drawdown_5d)}"
+        )
+    return lines
+
+
+def _weekly_average_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 前三名平均收益", ""]
+    for column, label in [
+        ("next_day_return", "次日平均收益"),
+        ("return_3d", "3日平均收益"),
+        ("return_5d", "5日平均收益"),
+    ]:
+        series = pd.to_numeric(top3[column], errors="coerce").dropna()
+        if series.empty:
+            lines.append(f"- {label}: 暂无完整数据")
+            continue
+        lines.append(f"- {label}: {series.mean():.2%}，样本 {len(series)}")
+    return lines
+
+
+def _weekly_win_rate_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 胜率", ""]
+    for column, label in [
+        ("next_day_return", "次日"),
+        ("return_3d", "3日"),
+        ("return_5d", "5日"),
+    ]:
+        series = pd.to_numeric(top3[column], errors="coerce").dropna()
+        if series.empty:
+            lines.append(f"- {label}: 暂无完整数据")
+            continue
+        lines.append(f"- {label}: {(series > 0).mean():.2%}，样本 {len(series)}")
+    return lines
+
+
+def _weekly_drawdown_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 最大回撤", ""]
+    series = pd.to_numeric(top3["max_drawdown_5d"], errors="coerce").dropna()
+    if series.empty:
+        return lines + ["暂无完整5日回撤数据。"]
+    worst_index = series.idxmin()
+    worst = top3.loc[worst_index]
+    lines.append(
+        f"- 本周前三名样本最大回撤: {series.min():.2%}，"
+        f"来自 {worst['date']} 第{int(worst['rank'])}名 {worst['code']} {worst['name']}"
+    )
+    return lines
+
+
+def _weekly_factor_lines(effective_factor: tuple[str, float] | None) -> list[str]:
+    lines = ["## 哪个评分因子最有效", ""]
+    if effective_factor is None:
+        return lines + ["样本不足，暂不能判断单个评分因子的有效性。"]
+    factor, correlation = effective_factor
+    lines.append(f"- 当前样本中 `{factor}` 与5日收益相关性最高，相关系数 {correlation:.3f}。")
+    return lines
+
+
+def _weekly_false_strength_lines(top3: pd.DataFrame) -> list[str]:
+    lines = ["## 假强势股票", ""]
+    if top3.empty:
+        return lines + ["暂无。"]
+    return_5d = pd.to_numeric(top3["return_5d"], errors="coerce")
+    drawdown = pd.to_numeric(top3["max_drawdown_5d"], errors="coerce")
+    false_strength = top3[(return_5d < 0) | (drawdown <= -0.05)]
+    if false_strength.empty:
+        return lines + ["暂无明确假强势样本。"]
+    for row in false_strength.itertuples():
+        lines.append(
+            f"- {row.date} 第{int(row.rank)}名 {row.code} {row.name}: "
+            f"评分 {float(row.score):.2f}，5日收益 {_format_pct(row.return_5d)}，"
+            f"最大回撤 {_format_pct(row.max_drawdown_5d)}"
+        )
+    return lines
+
+
+def _weekly_conclusion_lines(top3: pd.DataFrame, effective_factor: tuple[str, float] | None) -> list[str]:
+    lines = ["## 最终结论", ""]
+    five_day = pd.to_numeric(top3["return_5d"], errors="coerce").dropna()
+    if len(five_day) < 3:
+        conclusion = "当前5日验证样本不足，评分模型可以继续运行观察，暂不建议调整。"
+    elif five_day.mean() > 0 and (five_day > 0).mean() >= 0.5 and effective_factor is not None:
+        conclusion = "当前评分模型值得继续使用，暂不需要调整。"
+    else:
+        conclusion = "当前评分模型仍可运行，但需要重点复核因子权重和风险扣分。"
+    lines.append(conclusion)
+    return lines
+
+
+def _most_effective_factor(top3: pd.DataFrame) -> tuple[str, float] | None:
+    scored = top3.copy()
+    scored["return_5d"] = pd.to_numeric(scored["return_5d"], errors="coerce")
+    best: tuple[str, float] | None = None
+    for factor in FACTOR_COLUMNS:
+        if factor not in scored.columns:
+            continue
+        factor_values = pd.to_numeric(scored[factor], errors="coerce")
+        pairs = pd.DataFrame({"factor": factor_values, "return_5d": scored["return_5d"]}).dropna()
+        if len(pairs) < 2:
+            continue
+        correlation = pairs["factor"].corr(pairs["return_5d"])
+        if pd.isna(correlation):
+            continue
+        if best is None or correlation > best[1]:
+            best = (factor, float(correlation))
+    return best
+
+
+def _format_pct(value) -> str:
+    if pd.isna(value):
+        return "暂无数据"
+    return f"{float(value):.2%}"

@@ -5,7 +5,11 @@ import pandas as pd
 
 from stock_selector.akshare_engine import AkShareV1Engine
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
-from stock_selector.history_validation import generate_backtest_report, update_selection_history
+from stock_selector.history_validation import (
+    generate_backtest_report,
+    generate_weekly_review,
+    update_selection_history,
+)
 
 
 def test_update_selection_history_saves_top20_and_backfills_returns(tmp_path: Path) -> None:
@@ -17,7 +21,7 @@ def test_update_selection_history_saves_top20_and_backfills_returns(tmp_path: Pa
 
     history = pd.read_csv(history_path)
     assert len(history) == result.scored_count
-    assert set(history.columns) == {
+    assert {
         "date",
         "rank",
         "code",
@@ -29,11 +33,21 @@ def test_update_selection_history_saves_top20_and_backfills_returns(tmp_path: Pa
         "return_3d",
         "return_5d",
         "return_10d",
-    }
+        "max_gain_5d",
+        "max_drawdown_5d",
+        "ma20_score",
+        "ma_score",
+        "volume_score",
+        "breakout_score",
+        "risk_score",
+    }.issubset(set(history.columns))
     first_row = history.sort_values("rank").iloc[0]
     assert first_row["rank"] == 1
     assert pd.notna(first_row["next_day_return"])
     assert pd.notna(first_row["return_10d"])
+    assert pd.notna(first_row["max_gain_5d"])
+    assert pd.notna(first_row["max_drawdown_5d"])
+    assert pd.notna(first_row["ma20_score"])
 
 
 def test_generate_backtest_report_formats_rank_and_win_rate_sections(tmp_path: Path) -> None:
@@ -76,3 +90,72 @@ def test_generate_backtest_report_formats_rank_and_win_rate_sections(tmp_path: P
     assert "## 第二名平均收益" in report
     assert "## 前10名平均收益" in report
     assert "## 胜率统计" in report
+
+
+def test_generate_weekly_review_writes_friday_summary(tmp_path: Path) -> None:
+    history_path = tmp_path / "history" / "selection_history.csv"
+    output_dir = tmp_path / "reports"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for day_index, day in enumerate(["2026-06-01", "2026-06-02", "2026-06-03"], start=1):
+        for rank in (1, 2, 3):
+            rows.append(
+                {
+                    "date": day,
+                    "rank": rank,
+                    "code": f"60000{rank}",
+                    "name": f"样本{rank}",
+                    "sector": "人工智能",
+                    "score": 90 - rank,
+                    "close_price": 10 + rank,
+                    "ma20_score": 8 + rank + day_index,
+                    "ma_score": 7 + rank,
+                    "volume_score": 6 + rank,
+                    "breakout_score": 5 + rank,
+                    "risk_score": -rank,
+                    "market_cap_score": 2,
+                    "sector_heat_bonus": 3,
+                    "next_day_return": 0.01 * rank,
+                    "return_3d": 0.015 * rank,
+                    "return_5d": 0.02 * rank,
+                    "return_10d": 0.03 * rank,
+                    "max_gain_5d": 0.03 * rank,
+                    "max_drawdown_5d": -0.01 * rank,
+                }
+            )
+    pd.DataFrame(rows).to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    weekly_path = generate_weekly_review(
+        history_path=history_path,
+        output_dir=output_dir,
+        as_of_date=date(2026, 6, 5),
+    )
+
+    assert weekly_path == output_dir / "weekly-review-2026-06-05.md"
+    report = weekly_path.read_text(encoding="utf-8")
+    assert "## 本周每天前三名" in report
+    assert "## 每只股票后续表现" in report
+    assert "## 前三名平均收益" in report
+    assert "## 胜率" in report
+    assert "## 最大回撤" in report
+    assert "## 哪个评分因子最有效" in report
+    assert "## 假强势股票" in report
+    assert "## 最终结论" in report
+
+
+def test_generate_weekly_review_skips_non_friday(tmp_path: Path) -> None:
+    history_path = tmp_path / "history" / "selection_history.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=["date", "rank", "code", "name", "sector", "score", "close_price"]).to_csv(
+        history_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    weekly_path = generate_weekly_review(
+        history_path=history_path,
+        output_dir=tmp_path / "reports",
+        as_of_date=date(2026, 6, 3),
+    )
+
+    assert weekly_path is None

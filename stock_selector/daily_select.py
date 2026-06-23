@@ -8,7 +8,7 @@ import pandas as pd
 from stock_selector.akshare_engine import AkShareSelectionResult, AkShareV1Engine
 from stock_selector.data.baostock import BaoStockDataFetcher
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
-from stock_selector.history_validation import update_selection_history
+from stock_selector.history_validation import generate_weekly_review, update_selection_history
 
 
 def _raise_run_timeout(signum, frame):
@@ -233,12 +233,16 @@ def main() -> None:
         report_path.write_text(report, encoding="utf-8")
         today_stock_path.write_text(today_stock, encoding="utf-8")
         pd.DataFrame(_candidate_rows(result, result.top20)).to_csv(pool_path, index=False, encoding="utf-8-sig")
-        history_path = update_selection_history(result, fetcher=fetcher, as_of_date=date.fromisoformat(args.date))
+        run_date = date.fromisoformat(args.date)
+        history_path = update_selection_history(result, fetcher=fetcher, as_of_date=run_date)
+        weekly_review_path = generate_weekly_review(as_of_date=run_date)
         print(report)
         print(f"Top10 CSV: {pool_path}")
         print(f"Markdown report: {report_path}")
         print(f"Today summary: {today_stock_path}")
         print(f"Selection history: {history_path}")
+        if weekly_review_path is not None:
+            print(f"Weekly review: {weekly_review_path}")
     except TimeoutError as exc:
         print(f"运行超时：{exc}")
         print("已在5分钟上限内终止本次执行。")
