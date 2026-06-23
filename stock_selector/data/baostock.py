@@ -345,10 +345,16 @@ class BaoStockDataFetcher:
 def _result_to_frame(result: Any) -> pd.DataFrame:
     if getattr(result, "error_code", "0") != "0":
         raise RuntimeError(getattr(result, "error_msg", "BaoStock query failed"))
+    fields = list(getattr(result, "fields", []) or [])
+    if not fields:
+        return pd.DataFrame()
     rows = []
     while result.next():
-        rows.append(result.get_row_data())
-    return pd.DataFrame(rows, columns=result.fields)
+        row = result.get_row_data()
+        if len(row) != len(fields):
+            return pd.DataFrame(columns=fields)
+        rows.append(row)
+    return pd.DataFrame(rows, columns=fields)
 
 
 def _plain_code(code: str) -> str:

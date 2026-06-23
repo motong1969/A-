@@ -67,6 +67,14 @@ def send_today_stock_email_from_env(
             missing_secrets=missing,
             error="email config unavailable",
         )
+    if not Path(report_path).exists():
+        return _email_result(
+            email_sent=False,
+            smtp_connection="not_attempted",
+            gmail_auth="not_attempted",
+            missing_secrets=(),
+            error=f"report not found: {report_path}",
+        )
     try:
         send_today_stock_email(report_path=report_path, trade_date=trade_date, config=config)
     except smtplib.SMTPAuthenticationError as exc:

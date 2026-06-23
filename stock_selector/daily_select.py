@@ -238,7 +238,7 @@ def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
     return lines
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Run the A-share main-board selector.")
     parser.add_argument("--date", default=date.today().isoformat(), help="Scan date in YYYY-MM-DD format.")
     parser.add_argument("--mode", choices=["baostock", "akshare", "mock"], default="baostock", help="Use BaoStock, legacy AKShare, or deterministic mock data.")
@@ -277,17 +277,18 @@ def main() -> None:
     except TimeoutError as exc:
         print(f"运行超时：{exc}")
         print("已在5分钟上限内终止本次执行。")
-        return
+        return 1
     except Exception as exc:
         print(f"数据获取失败：{exc}")
         print("请稍后重试，或使用 --mode mock 验证流程。")
-        return
+        return 1
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
         if hasattr(fetcher, "close"):
             fetcher.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

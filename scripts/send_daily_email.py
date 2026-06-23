@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import os
 from pathlib import Path
 import sys
 
@@ -23,8 +24,13 @@ def main() -> int:
     args.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = args.log_dir / f"email-send-{trade_date.isoformat()}.log"
     result = send_today_stock_email_from_env(report_path=args.report_path, trade_date=trade_date)
-    log_path.write_text(result.log_text, encoding="utf-8")
-    print(result.log_text, end="")
+    extra_log = (
+        f"email_subject=A股自动选股日报 {trade_date.isoformat()}\n"
+        f"mail_to={os.getenv('MAIL_TO', 'none')}\n"
+    )
+    full_log = result.log_text + extra_log
+    log_path.write_text(full_log, encoding="utf-8")
+    print(full_log, end="")
     print(f"email_log={log_path}")
     if args.fail_on_error and not result.email_sent:
         return 1

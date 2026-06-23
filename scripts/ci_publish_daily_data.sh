@@ -13,6 +13,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ORIGIN_URL="$(git -C "$ROOT_DIR" remote get-url origin)"
+if [[ -n "${GITHUB_TOKEN:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+  ORIGIN_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+fi
 
 git init "$TMP_DIR" >/dev/null
 git -C "$TMP_DIR" remote add origin "$ORIGIN_URL"
