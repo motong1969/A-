@@ -1,0 +1,76 @@
+name: A Share Daily Select
+
+on:
+  schedule:
+    - cron: "10 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: a-share-daily-select
+  cancel-in-progress: false
+
+jobs:
+  daily-select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore reports and history from daily-data
+        run: bash scripts/ci_restore_daily_data.sh daily-data
+
+      - name: Check trading day
+        id: trading_day
+        run: |
+          set +e
+          python3 scripts/check_trading_day.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "is_trading_day=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 2 ]; then
+            echo "is_trading_day=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+
+      - name: Run selector
+        if: steps.trading_day.outputs.is_trading_day == 'true'
+        run: python3 scripts/run_daily_select.py --mode baostock --sector-limit 0
+
+      - name: Generate backtest report
+        if: steps.trading_day.outputs.is_trading_day == 'true'
+        run: python3 report_backtest.py
+
+      - name: Publish reports and history to daily-data
+        if: steps.trading_day.outputs.is_trading_day == 'true'
+        run: |
+          bash scripts/ci_publish_daily_data.sh daily-data "daily select $(date -u +%F)"
+
+      - name: Upload artifacts
+        if: steps.trading_day.outputs.is_trading_day == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-select-${{ github.run_id }}
+          path: |
+            reports/
+            history/selection_history.csv
+          if-no-files-found: error
+          retention-days: 30

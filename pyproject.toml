@@ -1,0 +1,27 @@
+[project]
+name = "a-share-main-force-selector"
+version = "0.1.0"
+description = "A-share short-term stock selection framework"
+requires-python = ">=3.10"
+dependencies = [
+  "akshare>=1.18",
+  "baostock>=0.9.2",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+stock-selector = "stock_selector.daily_select:main"
+stock-selector-daily = "stock_selector.daily_select:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["stock_selector*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
