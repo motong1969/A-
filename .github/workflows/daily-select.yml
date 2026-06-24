@@ -58,14 +58,9 @@ jobs:
             exit "$status"
           fi
 
-      - name: Refresh main-board cache
+      - name: Run realtime selector
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
-        run: |
-          timeout 60s python3 scripts/refresh_mainboard_cache.py || true
-
-      - name: Build cached selector report
-        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
-        run: python3 scripts/build_cached_report.py
+        run: python3 scripts/run_realtime_select.py --sector-limit 0
 
       - name: Build non-trading day report
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'false'

@@ -10,6 +10,10 @@ from stock_selector.email_notify import (
 
 REPORT = """# 今日主板选股摘要: 2026-06-23
 
+数据源名称：Sina
+数据日期：2026-06-23
+是否实时数据：是
+是否允许作为正式选股依据：是
 数据来源：实时数据
 市场状态：谨慎
 市场评分：51.94/100
@@ -53,7 +57,7 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
     message = build_today_stock_message(report_text=REPORT, trade_date=date(2026, 6, 23), config=config)
     body = message.get_content()
 
-    assert message["Subject"] == "A股自动选股日报 2026-06-23"
+    assert message["Subject"] == "A股自动选股日报 2026-06-23【实时数据】"
     assert message["Message-ID"]
     assert "【数据来源】" in body
     assert "数据来源：实时数据" in body
@@ -74,7 +78,7 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
     assert "今日市场风险等级：谨慎" in body
 
 
-def test_cached_source_uses_degraded_subject_and_watchlist() -> None:
+def test_failure_source_uses_failure_subject_and_no_first_pick() -> None:
     config = EmailConfig(
         smtp_host="smtp.gmail.com",
         smtp_port=587,
@@ -83,15 +87,17 @@ def test_cached_source_uses_degraded_subject_and_watchlist() -> None:
         mail_to="target@gmail.com",
         mail_from="sender@gmail.com",
     )
-    cached_report = REPORT.replace("数据来源：实时数据", "数据来源：缓存数据")
+    failed_report = REPORT.replace("是否实时数据：是", "是否实时数据：否").replace(
+        "是否允许作为正式选股依据：是", "是否允许作为正式选股依据：否"
+    ).replace("数据来源：实时数据", "数据来源：实时数据获取失败")
 
-    message = build_today_stock_message(report_text=cached_report, trade_date=date(2026, 6, 23), config=config)
+    message = build_today_stock_message(report_text=failed_report, trade_date=date(2026, 6, 23), config=config)
     body = message.get_content()
 
-    assert message["Subject"] == "【缓存降级】A股自动选股日报 2026-06-23"
-    assert "【观察名单】" in body
+    assert message["Subject"] == "A股自动选股日报 2026-06-23【实时数据获取失败】"
+    assert "【实时数据获取失败】" in body
     assert "【今日首选】" not in body
-    assert "仅观察" in body
+    assert "未生成：实时数据获取失败。" in body
 
 
 def test_missing_email_secrets_are_reported(monkeypatch) -> None:

@@ -1,9 +1,6 @@
 name: A Share Daily Email Backup
 
 on:
-  schedule:
-    # GitHub cron uses UTC. 08:10 UTC = 16:10 Asia/Shanghai.
-    - cron: "10 8 * * 1-5"
   workflow_dispatch:
 
 permissions:
@@ -37,11 +34,8 @@ jobs:
       - name: Restore reports and history from daily-data
         run: bash scripts/ci_restore_daily_data.sh daily-data || true
 
-      - name: Refresh main-board cache
-        run: timeout 60s python3 scripts/refresh_mainboard_cache.py || true
-
-      - name: Build cached selector report
-        run: python3 scripts/build_cached_report.py
+      - name: Run realtime selector
+        run: python3 scripts/run_realtime_select.py --sector-limit 0
 
       - name: Send Gmail notification
         env:

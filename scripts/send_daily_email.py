@@ -35,16 +35,18 @@ def main() -> int:
 
 
 def _email_subject(report_path: Path, trade_date: date) -> str:
-    prefix = ""
     try:
         report_text = report_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         report_text = ""
-    for line in report_text.splitlines():
-        if line.startswith("数据来源：") and line != "数据来源：实时数据":
-            prefix = "【缓存降级】"
-            break
-    return f"{prefix}A股自动选股日报 {trade_date.isoformat()}"
+    suffix = "【实时数据】"
+    if not (
+        "数据来源：实时数据" in report_text
+        and "是否实时数据：是" in report_text
+        and "是否允许作为正式选股依据：是" in report_text
+    ):
+        suffix = "【实时数据获取失败】"
+    return f"A股自动选股日报 {trade_date.isoformat()}{suffix}"
 
 
 if __name__ == "__main__":

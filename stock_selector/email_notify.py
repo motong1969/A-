@@ -172,8 +172,8 @@ def send_today_stock_email(
 
 def build_today_stock_message(*, report_text: str, trade_date: date, config: EmailConfig) -> EmailMessage:
     message = EmailMessage()
-    subject_prefix = "【缓存降级】" if _is_degraded_source(report_text) else ""
-    message["Subject"] = f"{subject_prefix}A股自动选股日报 {trade_date.isoformat()}"
+    subject_suffix = "【实时数据获取失败】" if _is_failure_source(report_text) else "【实时数据】"
+    message["Subject"] = f"A股自动选股日报 {trade_date.isoformat()}{subject_suffix}"
     message["From"] = config.mail_from
     message["To"] = config.mail_to
     message["Message-ID"] = make_msgid(domain="github-actions.local")
@@ -183,14 +183,17 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
 
 def _extract_email_body(report_text: str) -> str:
     lines = ["【数据来源】", _extract_data_source(report_text), ""]
-    if _is_degraded_source(report_text):
-        lines.extend(["【观察名单】", *_extract_watchlist_summary(report_text), ""])
-    else:
+    if _is_failure_source(report_text):
+        lines.extend(["【实时数据获取失败】", *_extract_failure_summary(report_text), ""])
+    elif _is_formal_realtime_source(report_text):
         lines.extend(["【今日首选】", *_extract_first_pick_summary(report_text), ""])
+    else:
+        lines.extend(["【观察名单】", *_extract_watchlist_summary(report_text), ""])
     lines.extend(
         [
             "【今日前三】",
-            *_extract_top3_summary(report_text),
+            *([] if _is_failure_source(report_text) else _extract_top3_summary(report_text)),
+            *(["未生成：实时数据获取失败。"] if _is_failure_source(report_text) else []),
             "",
             "【最近5日重复上榜统计】",
             *_extract_repeat_summary(report_text),
@@ -206,11 +209,13 @@ def _extract_email_body(report_text: str) -> str:
 
 
 def _extract_first_pick_summary(report_text: str) -> list[str]:
-    candidates = _repeat_candidates(report_text)
-    if not candidates:
-        candidates = _top3_candidates(report_text)
-    if not candidates:
+    top3 = _top3_candidates(report_text)
+    if not top3:
         return ["股票代码：暂无", "股票名称：暂无", "推荐等级：普通观察", "推荐理由：今日无可选股票。"]
+    top3_codes = {item["code"] for item in top3}
+    candidates = [item for item in _repeat_candidates(report_text) if item["code"] in top3_codes]
+    if not candidates:
+        candidates = top3
     first_pick = sorted(
         candidates,
         key=lambda item: (
@@ -364,6 +369,20 @@ def _extract_watchlist_summary(report_text: str) -> list[str]:
     return rows
 
 
+def _extract_failure_summary(report_text: str) -> list[str]:
+    section = _section_lines(report_text, "## 失败原因")
+    reasons = [line.removeprefix("- ").strip() for line in section if line.startswith("- ")]
+    if not reasons:
+        reasons = ["所有实时行情源均不可用或未取得当天有效行情。"]
+    metadata = [
+        _extract_line(report_text, "数据源名称："),
+        _extract_line(report_text, "数据日期："),
+        _extract_line(report_text, "是否实时数据："),
+        _extract_line(report_text, "是否允许作为正式选股依据："),
+    ]
+    return [line for line in metadata if line] + ["失败原因：" + "；".join(reasons[:5])]
+
+
 def _extract_market_risk(report_text: str) -> str:
     for line in report_text.splitlines():
         if line.startswith("市场状态："):
@@ -378,8 +397,23 @@ def _extract_data_source(report_text: str) -> str:
     return "数据来源：实时数据"
 
 
-def _is_degraded_source(report_text: str) -> bool:
-    return _extract_data_source(report_text) != "数据来源：实时数据"
+def _extract_line(report_text: str, prefix: str) -> str:
+    for line in report_text.splitlines():
+        if line.startswith(prefix):
+            return line
+    return ""
+
+
+def _is_formal_realtime_source(report_text: str) -> bool:
+    return (
+        _extract_data_source(report_text) == "数据来源：实时数据"
+        and _extract_line(report_text, "是否实时数据：") == "是否实时数据：是"
+        and _extract_line(report_text, "是否允许作为正式选股依据：") == "是否允许作为正式选股依据：是"
+    )
+
+
+def _is_failure_source(report_text: str) -> bool:
+    return not _is_formal_realtime_source(report_text)
 
 
 def _section_lines(report_text: str, heading: str) -> list[str]:

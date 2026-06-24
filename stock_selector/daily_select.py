@@ -167,12 +167,26 @@ def _risk_level_for_candidate(item, market_status: str) -> str:
     return "中" if market_status == "可交易" else "高"
 
 
-def render_today_stock(result: AkShareSelectionResult, repeat_watch_pool: list[dict] | None = None) -> str:
+def render_today_stock(
+    result: AkShareSelectionResult,
+    repeat_watch_pool: list[dict] | None = None,
+    *,
+    data_source: str = "实时数据",
+    data_date: date | None = None,
+    is_realtime: bool = True,
+    formal_allowed: bool = True,
+) -> str:
     best_score = result.best.score if result.best else None
     has_high_confidence = best_score is not None and best_score >= 75
+    actual_data_date = data_date or result.trade_date
     lines = [
         f"# 今日主板选股摘要: {result.trade_date.isoformat()}",
         "",
+        f"数据源名称：{data_source}",
+        f"数据日期：{actual_data_date.isoformat()}",
+        f"是否实时数据：{'是' if is_realtime else '否'}",
+        f"是否允许作为正式选股依据：{'是' if formal_allowed else '否'}",
+        "数据来源：实时数据" if is_realtime and formal_allowed else "数据来源：实时数据获取失败",
         f"市场状态：{result.market.status}",
         f"市场评分：{result.market.score:.2f}/100",
         f"通过硬过滤股票数量：{result.scored_count}",
