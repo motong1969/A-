@@ -77,8 +77,6 @@ class RealtimeMainBoardFetcher:
     def stock_history(self, symbol: str, end_date: date, days: int = 160) -> pd.DataFrame:
         if end_date != self.trade_date:
             return pd.DataFrame()
-        if self.data_source_name == "Tushare":
-            return self._tushare_history(symbol, end_date, days)
         code = str(symbol).zfill(6)
         live = self._spot_by_code.get(code)
         if live is None:
@@ -254,19 +252,6 @@ class RealtimeMainBoardFetcher:
         ts.set_token(token)
         self._tushare_client = ts.pro_api()
         return self._tushare_client
-
-    def _tushare_history(self, symbol: str, end_date: date, days: int) -> pd.DataFrame:
-        client = self._tushare()
-        code = str(symbol).zfill(6)
-        ts_code = f"{code}.SH" if code.startswith(("5", "6")) else f"{code}.SZ"
-        start_date = end_date - timedelta(days=days * 2)
-        frame = client.daily(
-            ts_code=ts_code,
-            start_date=start_date.strftime("%Y%m%d"),
-            end_date=end_date.strftime("%Y%m%d"),
-            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
-        ).copy()
-        return _normalize_tushare_history(frame, end_date)
 
     def _tushare_index_history(self, symbol: str, end_date: date, days: int) -> pd.DataFrame:
         client = self._tushare()

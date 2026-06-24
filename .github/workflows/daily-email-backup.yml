@@ -37,7 +37,7 @@ jobs:
       - name: Run realtime selector
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: python3 scripts/run_realtime_select.py --sector-limit 0
+        run: python3 scripts/run_realtime_select.py --sector-limit 0 --timeout-seconds 180
 
       - name: Send Gmail notification
         env:
