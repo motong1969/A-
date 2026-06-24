@@ -35,6 +35,8 @@ jobs:
         run: bash scripts/ci_restore_daily_data.sh daily-data || true
 
       - name: Run realtime selector
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: python3 scripts/run_realtime_select.py --sector-limit 0
 
       - name: Send Gmail notification

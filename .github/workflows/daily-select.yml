@@ -60,6 +60,8 @@ jobs:
 
       - name: Run realtime selector
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: python3 scripts/run_realtime_select.py --sector-limit 0
 
       - name: Build non-trading day report

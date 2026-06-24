@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ class RealtimeMainBoardFetcher:
         self._spot: pd.DataFrame | None = None
         self._spot_by_code: dict[str, dict] = {}
         self._baostock = BaoStockDataFetcher(cache_dir=cache_dir)
+        self._tushare_client = None
         if client is not None:
             self.client = client
         else:
@@ -75,6 +77,8 @@ class RealtimeMainBoardFetcher:
     def stock_history(self, symbol: str, end_date: date, days: int = 160) -> pd.DataFrame:
         if end_date != self.trade_date:
             return pd.DataFrame()
+        if self.data_source_name == "Tushare":
+            return self._tushare_history(symbol, end_date, days)
         code = str(symbol).zfill(6)
         live = self._spot_by_code.get(code)
         if live is None:
@@ -99,6 +103,11 @@ class RealtimeMainBoardFetcher:
         return combined
 
     def index_history(self, symbol: str, end_date: date, days: int = 30) -> pd.DataFrame:
+        if self.data_source_name == "Tushare":
+            try:
+                return self._tushare_index_history(symbol, end_date, days)
+            except Exception:
+                return pd.DataFrame()
         try:
             return self._baostock.index_history(symbol, end_date, days=days)
         except Exception:
@@ -154,7 +163,12 @@ class RealtimeMainBoardFetcher:
     def _load_realtime_spot(self) -> pd.DataFrame:
         if self._spot is not None:
             return self._spot
-        providers = (("Eastmoney", self._eastmoney_spot), ("Tencent", self._tencent_spot), ("AkShare-Sina", self._sina_spot))
+        providers = (
+            ("Tushare", self._tushare_spot),
+            ("Eastmoney", self._eastmoney_spot),
+            ("Tencent", self._tencent_spot),
+            ("AkShare-Sina", self._sina_spot),
+        )
         for name, provider in providers:
             try:
                 frame = provider()
@@ -202,6 +216,73 @@ class RealtimeMainBoardFetcher:
             }
         )
         return _normalize_realtime_spot(frame, source="Eastmoney")
+
+    def _tushare_spot(self) -> pd.DataFrame:
+        token = os.getenv("TUSHARE_TOKEN") or os.getenv("TUSHARE_PRO_TOKEN")
+        if not token:
+            raise RealtimeMarketDataError("TUSHARE_TOKEN is not configured")
+        client = self._tushare()
+        frame = client.daily(
+            trade_date=self.trade_date.strftime("%Y%m%d"),
+            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        ).copy()
+        if frame.empty:
+            raise RealtimeMarketDataError(f"Tushare daily returned 0 rows for {self.trade_date.isoformat()}")
+        frame["代码"] = frame["ts_code"].astype(str).str.extract(r"(\d{6})", expand=False)
+        frame["名称"] = frame["代码"]
+        frame["收盘价"] = pd.to_numeric(frame["close"], errors="coerce")
+        frame["开盘价"] = pd.to_numeric(frame["open"], errors="coerce")
+        frame["最高价"] = pd.to_numeric(frame["high"], errors="coerce")
+        frame["最低价"] = pd.to_numeric(frame["low"], errors="coerce")
+        frame["成交量"] = pd.to_numeric(frame["vol"], errors="coerce") * 100
+        frame["成交额"] = pd.to_numeric(frame["amount"], errors="coerce") * 1000
+        frame["涨跌幅"] = pd.to_numeric(frame["pct_chg"], errors="coerce")
+        frame["换手率"] = 0.0
+        frame["流通市值"] = 0.0
+        return _normalize_realtime_spot(frame, source="Tushare")
+
+    def _tushare(self):
+        if self._tushare_client is not None:
+            return self._tushare_client
+        try:
+            import tushare as ts
+        except ImportError as exc:
+            raise RealtimeMarketDataError("tushare package is not installed") from exc
+        token = os.getenv("TUSHARE_TOKEN") or os.getenv("TUSHARE_PRO_TOKEN")
+        if not token:
+            raise RealtimeMarketDataError("TUSHARE_TOKEN is not configured")
+        ts.set_token(token)
+        self._tushare_client = ts.pro_api()
+        return self._tushare_client
+
+    def _tushare_history(self, symbol: str, end_date: date, days: int) -> pd.DataFrame:
+        client = self._tushare()
+        code = str(symbol).zfill(6)
+        ts_code = f"{code}.SH" if code.startswith(("5", "6")) else f"{code}.SZ"
+        start_date = end_date - timedelta(days=days * 2)
+        frame = client.daily(
+            ts_code=ts_code,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        ).copy()
+        return _normalize_tushare_history(frame, end_date)
+
+    def _tushare_index_history(self, symbol: str, end_date: date, days: int) -> pd.DataFrame:
+        client = self._tushare()
+        ts_code = "000001.SH" if symbol in {"sh000001", "000001", "sh.000001"} else symbol
+        start_date = end_date - timedelta(days=days * 2)
+        frame = client.index_daily(
+            ts_code=ts_code,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            fields="ts_code,trade_date,close",
+        ).copy()
+        if frame.empty:
+            return pd.DataFrame()
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], format="%Y%m%d", errors="coerce").dt.date
+        frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+        return frame[["trade_date", "close"]].dropna().sort_values("trade_date").reset_index(drop=True)
 
     def _sina_spot(self) -> pd.DataFrame:
         frame = self.client.stock_zh_a_spot().copy()
@@ -262,6 +343,29 @@ def _normalize_realtime_spot(frame: pd.DataFrame, *, source: str) -> pd.DataFram
     return normalized[
         ["代码", "名称", "所属板块", "涨跌幅", "成交额", "换手率", "流通市值", "收盘价", "开盘价", "最高价", "最低价", "成交量"]
     ]
+
+
+def _normalize_tushare_history(frame: pd.DataFrame, end_date: date) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    normalized = frame.copy()
+    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], format="%Y%m%d", errors="coerce").dt.date
+    normalized["open"] = pd.to_numeric(normalized["open"], errors="coerce")
+    normalized["high"] = pd.to_numeric(normalized["high"], errors="coerce")
+    normalized["low"] = pd.to_numeric(normalized["low"], errors="coerce")
+    normalized["close"] = pd.to_numeric(normalized["close"], errors="coerce")
+    normalized["vol"] = pd.to_numeric(normalized["vol"], errors="coerce") * 100
+    normalized["amount"] = pd.to_numeric(normalized["amount"], errors="coerce") * 1000
+    normalized["turnover_rate"] = 0.0
+    normalized["pct_chg"] = pd.to_numeric(normalized["pct_chg"], errors="coerce")
+    normalized["is_st"] = 0
+    normalized = normalized[
+        ["trade_date", "open", "high", "low", "close", "vol", "amount", "turnover_rate", "pct_chg", "is_st"]
+    ].dropna(subset=["trade_date", "close", "vol", "pct_chg"])
+    normalized = normalized.sort_values("trade_date").reset_index(drop=True)
+    if normalized.empty or normalized.iloc[-1]["trade_date"] != end_date:
+        return pd.DataFrame()
+    return normalized
 
 
 def _live_row(row: dict, trade_date: date) -> pd.DataFrame:
