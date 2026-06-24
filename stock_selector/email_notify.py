@@ -203,6 +203,9 @@ def _extract_email_body(report_text: str) -> str:
             "",
             "【风险提示】",
             _extract_market_risk(report_text),
+            "",
+            "【数据验证】",
+            *_extract_data_validation(report_text),
         ]
     )
     return "\n".join(lines).strip()
@@ -381,6 +384,20 @@ def _extract_failure_summary(report_text: str) -> list[str]:
         _extract_line(report_text, "是否允许作为正式选股依据："),
     ]
     return [line for line in metadata if line] + ["失败原因：" + "；".join(reasons[:5])]
+
+
+def _extract_data_validation(report_text: str) -> list[str]:
+    return [
+        _extract_line(report_text, "数据源名称：") or "数据源名称：无",
+        _extract_line(report_text, "数据日期：") or "数据日期：未知",
+        _bool_line(report_text, "是否实时数据：", "is_realtime"),
+        _bool_line(report_text, "是否允许作为正式选股依据：", "formal_allowed"),
+    ]
+
+
+def _bool_line(report_text: str, prefix: str, key: str) -> str:
+    value = _extract_line(report_text, prefix).split("：", 1)[-1]
+    return f"{key}={'true' if value == '是' else 'false'}"
 
 
 def _extract_market_risk(report_text: str) -> str:

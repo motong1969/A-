@@ -76,6 +76,11 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
     assert "连续上榜天数：2" in body
     assert "【系统建议】" in body
     assert "今日市场风险等级：谨慎" in body
+    assert "【数据验证】" in body
+    assert "数据源名称：Sina" in body
+    assert "数据日期：2026-06-23" in body
+    assert "is_realtime=true" in body
+    assert "formal_allowed=true" in body
 
 
 def test_failure_source_uses_failure_subject_and_no_first_pick() -> None:
