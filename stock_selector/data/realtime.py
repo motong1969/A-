@@ -154,7 +154,7 @@ class RealtimeMainBoardFetcher:
     def _load_realtime_spot(self) -> pd.DataFrame:
         if self._spot is not None:
             return self._spot
-        providers = (("Eastmoney", self._eastmoney_spot), ("AkShare-Sina", self._sina_spot))
+        providers = (("Eastmoney", self._eastmoney_spot), ("Tencent", self._tencent_spot), ("AkShare-Sina", self._sina_spot))
         for name, provider in providers:
             try:
                 frame = provider()
@@ -206,6 +206,19 @@ class RealtimeMainBoardFetcher:
     def _sina_spot(self) -> pd.DataFrame:
         frame = self.client.stock_zh_a_spot().copy()
         return _normalize_realtime_spot(frame, source="Sina")
+
+    def _tencent_spot(self) -> pd.DataFrame:
+        pool = self._read_pool()
+        symbols = [_tencent_symbol(code) for code in pool["代码"].astype(str)]
+        rows = []
+        for batch in _chunks(symbols, 120):
+            response = requests.get("https://qt.gtimg.cn/q=" + ",".join(batch), timeout=12)
+            response.raise_for_status()
+            rows.extend(_parse_tencent_response(response.text))
+        frame = pd.DataFrame(rows)
+        if frame.empty:
+            raise RealtimeMarketDataError("Tencent quote returned 0 rows")
+        return _normalize_realtime_spot(frame, source="Tencent")
 
     def _read_daily_cache(self, symbol: str) -> pd.DataFrame:
         path = self.daily_cache_dir / f"{symbol}.csv"
@@ -285,3 +298,46 @@ def _number(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _tencent_symbol(code: str) -> str:
+    normalized = str(code).zfill(6)
+    return f"sh{normalized}" if normalized.startswith(("5", "6")) else f"sz{normalized}"
+
+
+def _chunks(items: list[str], size: int):
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
+
+
+def _parse_tencent_response(text: str) -> list[dict]:
+    rows = []
+    for line in text.splitlines():
+        if '="' not in line:
+            continue
+        payload = line.split('="', 1)[1].rstrip('";')
+        fields = payload.split("~")
+        if len(fields) < 39 or fields[0] == "v_pv_none_match":
+            continue
+        code = fields[2]
+        close = _number(fields[3])
+        previous_close = _number(fields[4])
+        pct = _number(fields[32]) if len(fields) > 32 else 0.0
+        if pct == 0.0 and close > 0 and previous_close > 0:
+            pct = (close / previous_close - 1) * 100
+        rows.append(
+            {
+                "代码": code,
+                "名称": fields[1],
+                "收盘价": close,
+                "开盘价": _number(fields[5]),
+                "最高价": _number(fields[33]) if len(fields) > 33 else close,
+                "最低价": _number(fields[34]) if len(fields) > 34 else close,
+                "成交量": _number(fields[36]) if len(fields) > 36 else _number(fields[6]),
+                "成交额": _number(fields[37]) * 10000 if len(fields) > 37 else 0.0,
+                "涨跌幅": pct,
+                "换手率": _number(fields[38]) if len(fields) > 38 else 0.0,
+                "流通市值": _number(fields[44]) * 100000000 if len(fields) > 44 else 0.0,
+            }
+        )
+    return rows
