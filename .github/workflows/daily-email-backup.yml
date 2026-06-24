@@ -1,0 +1,62 @@
+name: A Share Daily Email Backup
+
+on:
+  schedule:
+    # GitHub cron uses UTC. 08:10 UTC = 16:10 Asia/Shanghai.
+    - cron: "10 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a-share-daily-email-backup
+  cancel-in-progress: false
+
+jobs:
+  send-email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Restore reports and history from daily-data
+        run: bash scripts/ci_restore_daily_data.sh daily-data || true
+
+      - name: Refresh main-board cache
+        run: timeout 60s python3 scripts/refresh_mainboard_cache.py || true
+
+      - name: Build cached selector report
+        run: python3 scripts/build_cached_report.py
+
+      - name: Send Gmail notification
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python3 scripts/send_daily_email.py --fail-on-error
+
+      - name: Upload email artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-email-backup-${{ github.run_id }}
+          path: |
+            reports/today_stock.md
+            reports/repeat-watch-pool.csv
+            reports/email-send-*.log
+          if-no-files-found: error
+          retention-days: 30
