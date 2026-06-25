@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import os
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,11 @@ class RealtimeMainBoardFetcher:
         frame = frame.dropna(subset=["涨跌幅", "成交额", "收盘价", "成交量"])
         if frame.empty:
             raise RealtimeMarketDataError(f"{self.data_source_name or 'unknown'} 全A股行情缺少涨跌幅、成交额、收盘价或成交量")
-        return frame[["代码", "名称", "涨跌幅", "成交额", "收盘价", "成交量"]]
+        columns = ["代码", "名称", "涨跌幅", "成交额", "收盘价", "成交量"]
+        for optional in ("涨停标记", "跌停标记"):
+            if optional in frame:
+                columns.append(optional)
+        return frame[columns]
 
     def stock_history(self, symbol: str, end_date: date, days: int = 160) -> pd.DataFrame:
         if end_date != self.trade_date:
@@ -262,6 +267,17 @@ class RealtimeMainBoardFetcher:
             on=["ts_code", "trade_date"],
             how="left",
         )
+        stock_basic = client.stock_basic(
+            exchange="",
+            list_status="L",
+            fields="ts_code,name,market,exchange",
+        ).copy()
+        if not stock_basic.empty:
+            frame = frame.merge(stock_basic, on="ts_code", how="left")
+        else:
+            frame["name"] = ""
+            frame["market"] = ""
+            frame["exchange"] = ""
         frame["turnover_rate"] = pd.to_numeric(frame["turnover_rate"], errors="coerce")
         missing_turnover = int(frame["turnover_rate"].isna().sum())
         if missing_turnover:
@@ -272,7 +288,7 @@ class RealtimeMainBoardFetcher:
         if frame.empty:
             raise RealtimeMarketDataError("Tushare daily_basic did not provide any usable turnover_rate values")
         frame["代码"] = frame["ts_code"].astype(str).str.extract(r"(\d{6})", expand=False)
-        frame["名称"] = frame["代码"]
+        frame["名称"] = frame["name"].fillna(frame["代码"]).astype(str)
         frame["收盘价"] = pd.to_numeric(frame["close"], errors="coerce")
         frame["开盘价"] = pd.to_numeric(frame["open"], errors="coerce")
         frame["最高价"] = pd.to_numeric(frame["high"], errors="coerce")
@@ -282,6 +298,9 @@ class RealtimeMainBoardFetcher:
         frame["涨跌幅"] = pd.to_numeric(frame["pct_chg"], errors="coerce")
         frame["换手率"] = frame["turnover_rate"]
         frame["流通市值"] = pd.to_numeric(frame["circ_mv"], errors="coerce") * 10000
+        limit_flags = frame.apply(_tushare_limit_flags, axis=1)
+        frame["涨停标记"] = [item[0] for item in limit_flags]
+        frame["跌停标记"] = [item[1] for item in limit_flags]
         return _normalize_realtime_spot(frame, source="Tushare")
 
     def _tushare(self):
@@ -370,9 +389,40 @@ def _normalize_realtime_spot(frame: pd.DataFrame, *, source: str) -> pd.DataFram
         normalized["所属板块"] = "未映射"
     normalized = normalized.dropna(subset=["收盘价", "成交量", "涨跌幅"])
     normalized = normalized[normalized["收盘价"] > 0].copy()
-    return normalized[
-        ["代码", "名称", "所属板块", "涨跌幅", "成交额", "换手率", "流通市值", "收盘价", "开盘价", "最高价", "最低价", "成交量"]
-    ]
+    columns = ["代码", "名称", "所属板块", "涨跌幅", "成交额", "换手率", "流通市值", "收盘价", "开盘价", "最高价", "最低价", "成交量"]
+    for optional in ("涨停标记", "跌停标记"):
+        if optional in normalized:
+            normalized[optional] = pd.to_numeric(normalized[optional], errors="coerce")
+            columns.append(optional)
+    return normalized[columns]
+
+
+def _tushare_limit_flags(row) -> tuple[float | None, float | None]:
+    ts_code = str(row.get("ts_code") or "")
+    code = str(row.get("代码") or "").zfill(6)
+    exchange = str(row.get("exchange") or "").upper()
+    name = str(row.get("name") or "").upper()
+    if ts_code.endswith(".BJ") or exchange == "BSE":
+        return None, None
+    pre_close = _number(row.get("pre_close"))
+    close = _number(row.get("close"))
+    pct = _number(row.get("pct_chg"))
+    if pre_close <= 0 or close <= 0:
+        return None, None
+    if "ST" in name:
+        ratio = 0.05
+    elif code.startswith(("300", "301", "688", "689")):
+        ratio = 0.20
+    else:
+        ratio = 0.10
+    up_price = _rounded_limit_price(pre_close, ratio, 1)
+    down_price = _rounded_limit_price(pre_close, ratio, -1)
+    return float(close >= up_price and pct > 0), float(close <= down_price and pct < 0)
+
+
+def _rounded_limit_price(pre_close: float, ratio: float, direction: int) -> float:
+    value = Decimal(str(pre_close)) * (Decimal("1") + Decimal(str(ratio * direction)))
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _normalize_tushare_history(frame: pd.DataFrame, end_date: date) -> pd.DataFrame:

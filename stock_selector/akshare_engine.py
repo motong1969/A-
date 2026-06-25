@@ -65,6 +65,9 @@ class MarketEnvironment:
     down_count: int = 0
     flat_count: int = 0
     available: bool = True
+    limit_stats_available: bool = False
+    limit_scope: str = ""
+    limit_excluded_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -440,8 +443,21 @@ class AkShareV1Engine:
         down_count = int((pct < 0).sum())
         flat_count = int((pct == 0).sum())
         up_ratio = float((pct > 0).mean()) if not pct.empty else 0.0
-        limit_up_count = int((pct >= 9.5).sum())
-        limit_down_count = int((pct <= -9.5).sum())
+        limit_up_count = 0
+        limit_down_count = 0
+        limit_stats_available = False
+        limit_scope = ""
+        limit_excluded_count = 0
+        if {"涨停标记", "跌停标记"}.issubset(market_spot.columns):
+            limit_up = pd.to_numeric(market_spot["涨停标记"], errors="coerce")
+            limit_down = pd.to_numeric(market_spot["跌停标记"], errors="coerce")
+            valid_limit = limit_up.notna() & limit_down.notna()
+            if valid_limit.any():
+                limit_stats_available = True
+                limit_up_count = int((limit_up[valid_limit] == 1).sum())
+                limit_down_count = int((limit_down[valid_limit] == 1).sum())
+                limit_excluded_count = int((~valid_limit).sum())
+                limit_scope = "沪深A股；按涨跌停价计算；主板10%，创业板/科创板20%，ST/*ST 5%；排除北交所"
         average_pct = float(pct.mean()) if not pct.empty else -10.0
         score = max(0.0, min(100.0, up_ratio * 45 + min(limit_up_count / max(len(pct) * 0.012, 1), 1) * 25 + max(min((average_pct + 2.0) / 4.0, 1), 0) * 20 + max(0.0, 10 - min(limit_down_count, 10))))
         status = "观望" if score < 35 else ("谨慎" if score < 55 else "可交易")
@@ -456,6 +472,9 @@ class AkShareV1Engine:
             down_count=down_count,
             flat_count=flat_count,
             available=True,
+            limit_stats_available=limit_stats_available,
+            limit_scope=limit_scope,
+            limit_excluded_count=limit_excluded_count,
         )
 
     def _load_funds(self) -> dict[str, dict[str, float]]:

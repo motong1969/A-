@@ -256,7 +256,7 @@ def _market_overview_lines(result: AkShareSelectionResult, best_score: float | N
             f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
         ]
     data_date = result.market.data_date or result.trade_date
-    return [
+    lines = [
         f"- 统计口径：{result.market.scope}",
         f"- 数据来源：{result.market.source}",
         f"- 数据日期：{data_date.isoformat()}",
@@ -264,14 +264,28 @@ def _market_overview_lines(result: AkShareSelectionResult, best_score: float | N
         f"- 全A股上涨家数：{result.market.up_count}",
         f"- 全A股下跌家数：{result.market.down_count}",
         f"- 全A股平盘家数：{result.market.flat_count}",
-        f"- 全A股涨停家数：{result.market.limit_up_count}",
-        f"- 全A股跌停家数：{result.market.limit_down_count}",
         f"- 全A股成交额：{result.market.total_amount / 1_000_000_000_000:.2f} 万亿元",
-        f"- 市场状态：{result.market.status}",
-        f"- 市场评分：{result.market.score:.2f}/100",
-        f"- 通过硬过滤股票数量：{result.scored_count}",
-        f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
     ]
+    if result.market.limit_stats_available:
+        lines.extend(
+            [
+                f"- 涨停/跌停统计口径：{result.market.limit_scope}",
+                f"- 涨跌停统计排除数量：{result.market.limit_excluded_count}",
+                f"- 涨停家数：{result.market.limit_up_count}",
+                f"- 跌停家数：{result.market.limit_down_count}",
+            ]
+        )
+    else:
+        lines.append("- 涨停/跌停统计：无法按不同涨跌幅限制精确计算，已隐藏。")
+    lines.extend(
+        [
+            f"- 市场状态：{result.market.status}",
+            f"- 市场评分：{result.market.score:.2f}/100",
+            f"- 通过硬过滤股票数量：{result.scored_count}",
+            f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
+        ]
+    )
+    return lines
 
 
 def _candidate_summary_lines(index: int, item, market_status: str) -> list[str]:

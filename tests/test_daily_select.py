@@ -59,6 +59,10 @@ def test_render_today_stock_lists_top3_details() -> None:
     assert "- 统计口径：全A股" in report
     assert "- 全A股上涨家数：" in report
     assert "- 全A股成交额：" in report
+    assert (
+        "- 涨停/跌停统计口径：" in report
+        or "- 涨停/跌停统计：无法按不同涨跌幅限制精确计算，已隐藏。" in report
+    )
 
 
 def test_render_today_stock_preserves_empty_position_message() -> None:
