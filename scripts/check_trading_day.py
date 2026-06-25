@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 from datetime import date
 import sys
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Check whether a date is an A-share trading day.")
+    parser.add_argument("--date", default=date.today().isoformat())
+    args = parser.parse_args()
     try:
         import baostock as bs
     except Exception as exc:
         print(f"BaoStock import failed: {exc}")
         return 1
 
-    today = date.today().isoformat()
+    today = args.date
     login = bs.login()
     if getattr(login, "error_code", "0") != "0":
         print(f"BaoStock login failed: {getattr(login, 'error_msg', 'unknown error')}")

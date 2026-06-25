@@ -9,6 +9,10 @@ on:
         description: "Only send a Gmail test using the saved 2026-06-23 report fixture"
         required: false
         default: "false"
+      run_date:
+        description: "Optional report date in YYYY-MM-DD format"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -42,12 +46,21 @@ jobs:
         if: github.event.inputs.email_test_only != 'true'
         run: bash scripts/ci_restore_daily_data.sh daily-data
 
+      - name: Resolve run date
+        id: run_date
+        run: |
+          if [ -n "${{ github.event.inputs.run_date }}" ]; then
+            echo "value=${{ github.event.inputs.run_date }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check trading day
         if: github.event.inputs.email_test_only != 'true'
         id: trading_day
         run: |
           set +e
-          python3 scripts/check_trading_day.py
+          python3 scripts/check_trading_day.py --date "${{ steps.run_date.outputs.value }}"
           status=$?
           set -e
           if [ "$status" -eq 0 ]; then
@@ -62,11 +75,11 @@ jobs:
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: python3 scripts/run_realtime_select.py --sector-limit 0 --timeout-seconds 180
+        run: python3 scripts/run_realtime_select.py --date "${{ steps.run_date.outputs.value }}" --sector-limit 0 --timeout-seconds 180
 
       - name: Build non-trading day report
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'false'
-        run: python3 scripts/build_fallback_report.py --date "$(date -u +%F)" --reason "今日不是交易日，系统发送例行状态邮件。"
+        run: python3 scripts/build_fallback_report.py --date "${{ steps.run_date.outputs.value }}" --reason "今日不是交易日，系统发送例行状态邮件。"
 
       - name: Build Gmail test report
         if: github.event.inputs.email_test_only == 'true'
@@ -90,7 +103,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python3 scripts/send_daily_email.py --fail-on-error
+        run: python3 scripts/send_daily_email.py --fail-on-error --date "${{ steps.run_date.outputs.value }}"
 
       - name: Publish reports and history to daily-data
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
@@ -98,7 +111,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bash scripts/ci_publish_daily_data.sh daily-data "daily select $(date -u +%F)"
+          bash scripts/ci_publish_daily_data.sh daily-data "daily select ${{ steps.run_date.outputs.value }}"
 
       - name: Upload artifacts
         if: github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false'
