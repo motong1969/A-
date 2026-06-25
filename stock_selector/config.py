@@ -35,7 +35,7 @@ class MainBoardTradingRules:
     mainline_sector_score: float = 70.0
     mainline_sector_rank_limit: int = 5
     scoring_universe_limit: int = 300
-    top_n_pool: int = 10
+    top_n_pool: int = 20
     top_n_candidates: int = 3
 
 

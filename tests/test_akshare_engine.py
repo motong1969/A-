@@ -37,7 +37,7 @@ def test_forbidden_markets_never_request_history_or_enter_ranking() -> None:
 def test_rankings_return_top10_top3_and_best() -> None:
     result = AkShareV1Engine(fetcher=MockAkShareDataFetcher()).run(date(2026, 6, 2))
     assert result.scored_count == 12
-    assert len(result.top20) == 10
+    assert len(result.top20) == 12
     assert len(result.top10) == 10
     assert len(result.top3) == 3
     assert result.best == result.top20[0]

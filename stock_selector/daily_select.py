@@ -179,56 +179,223 @@ def render_today_stock(
     best_score = result.best.score if result.best else None
     has_high_confidence = best_score is not None and best_score >= 75
     actual_data_date = data_date or result.trade_date
+    repeat_watch_pool = repeat_watch_pool or []
     lines = [
-        f"# 今日主板选股摘要: {result.trade_date.isoformat()}",
+        f"# A股收盘报告: {result.trade_date.isoformat()}",
         "",
         f"数据源名称：{data_source}",
         f"数据日期：{actual_data_date.isoformat()}",
         f"是否实时数据：{'是' if is_realtime else '否'}",
         f"是否允许作为正式选股依据：{'是' if formal_allowed else '否'}",
         "数据来源：实时数据" if is_realtime and formal_allowed else "数据来源：实时数据获取失败",
-        f"市场状态：{result.market.status}",
-        f"市场评分：{result.market.score:.2f}/100",
-        f"通过硬过滤股票数量：{result.scored_count}",
-        (
-            "结论：今日有可跟踪机会，以下为前3名。"
-            if has_high_confidence
-            else "结论：今日无高确定性机会，建议空仓观察。以下为当日排序前3，仅供复盘观察。"
-        ),
+        "",
+        "## ① 今日首选",
+        "",
+        *_first_pick_lines(result, repeat_watch_pool),
+        "",
+        "## ② 今日前三",
+        "",
+        "## 今日推荐3只主板股票",
         "",
     ]
     if not result.top3:
-        lines.extend(
-            [
-                "## 今日推荐3只主板股票",
-                "",
-                "今日无入选股票。",
-            ]
-        )
-        lines.extend(_repeat_watch_pool_lines(repeat_watch_pool or []))
-        return "\n".join(lines) + "\n"
-
-    lines.extend(["## 今日推荐3只主板股票", ""])
-    for index, item in enumerate(result.top3, start=1):
-        lines.extend(
-            [
-                f"### {index}. {item.name} ({item.code})",
-                f"- 所属板块：{item.sector}",
-                f"- 最终评分：{item.score:.2f}",
-                f"- 推荐理由：{'；'.join(item.reasons)}",
-                f"- 买入区间：{item.buy_range}",
-                f"- 止损位：{item.stop_loss:.2f}",
-                f"- 风险等级：{_risk_level_for_candidate(item, result.market.status)}",
-                "",
-            ]
-        )
-    lines.extend(_repeat_watch_pool_lines(repeat_watch_pool or []))
+        lines.extend(["今日无入选股票。", ""])
+    else:
+        for index, item in enumerate(result.top3, start=1):
+            lines.extend(_candidate_summary_lines(index, item, result.market.status))
+    lines.extend(
+        [
+            "## ③ 今天为什么没有（如果没有）",
+            "",
+            _no_pick_reason(result, has_high_confidence),
+            "",
+            "## ④ 今日市场概况",
+            "",
+            f"- 市场状态：{result.market.status}",
+            f"- 市场评分：{result.market.score:.2f}/100",
+            f"- 上涨家数占比：{result.market.up_ratio:.1%}",
+            f"- 涨停 / 跌停：{result.market.limit_up_count} / {result.market.limit_down_count}",
+            f"- 市场成交额：{result.market.total_amount / 100_000_000:.2f} 亿元",
+            f"- 通过硬过滤股票数量：{result.scored_count}",
+            f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
+            "",
+            "## ⑤ 今日板块排行榜",
+            "",
+            *_sector_leaderboard_lines(result),
+            "",
+        ]
+    )
+    lines.extend(_repeat_watch_pool_lines(repeat_watch_pool))
+    lines.extend(
+        [
+            "## ⑦ 今日所有候选股票（Top20）",
+            "",
+            *_top20_lines(result),
+            "",
+            "## ⑧ 每只股票评分明细",
+            "",
+            *_score_detail_lines(result),
+            "",
+            "## ⑨ 今日淘汰统计",
+            "",
+            *_elimination_stats_lines(result),
+            "",
+            "## ⑩ 数据来源验证",
+            "",
+            f"- 数据源名称：{data_source}",
+            f"- 数据日期：{actual_data_date.isoformat()}",
+            f"- is_realtime={'true' if is_realtime else 'false'}",
+            f"- formal_allowed={'true' if formal_allowed else 'false'}",
+            f"- 报告用途：{'正式选股依据' if is_realtime and formal_allowed else '失败/降级说明，不作为正式选股依据'}",
+            "",
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _candidate_summary_lines(index: int, item, market_status: str) -> list[str]:
+    return [
+        f"### {index}. {item.name} ({item.code})",
+        f"- 所属板块：{item.sector}",
+        f"- 最终评分：{item.score:.2f}",
+        f"- 推荐理由：{'；'.join(item.reasons)}",
+        f"- 买入区间：{item.buy_range}",
+        f"- 止损位：{item.stop_loss:.2f}",
+        f"- 风险等级：{_risk_level_for_candidate(item, market_status)}",
+        "",
+    ]
+
+
+def _first_pick_lines(result: AkShareSelectionResult, repeat_watch_pool: list[dict]) -> list[str]:
+    if not result.top3:
+        return ["今日首选：暂无", "原因：今日无通过硬过滤的候选股票。"]
+    top3_by_code = {item.code: item for item in result.top3}
+    repeat_by_code = {item["code"]: item for item in repeat_watch_pool}
+    candidates = []
+    for item in result.top3:
+        repeat = repeat_by_code.get(item.code, {})
+        list_count = int(repeat.get("list_count_5d", 1))
+        continuous_days = int(repeat.get("continuous_days", 1))
+        candidates.append((item, list_count, continuous_days))
+    item, list_count, continuous_days = sorted(
+        candidates,
+        key=lambda row: (-row[1], -row[2], -row[0].score, result.top3.index(row[0]) + 1),
+    )[0]
+    if list_count >= 3:
+        level = "强重点观察"
+    elif list_count == 2:
+        level = "重点观察"
+    elif list_count == 1 and item == result.top3[0]:
+        level = "短线观察"
+    else:
+        level = "普通观察"
+    return [
+        f"股票代码：{item.code}",
+        f"股票名称：{item.name}",
+        f"推荐等级：{level}",
+        f"推荐理由：最近5日上榜 {list_count} 次，连续上榜 {continuous_days} 天，今日排名第 {result.top3.index(item) + 1}，总评分 {item.score:.2f}。",
+    ]
+
+
+def _no_pick_reason(result: AkShareSelectionResult, has_high_confidence: bool) -> str:
+    if not result.top3:
+        stats = result.elimination_stats or {}
+        failed = stats.get("hard_filter_failed", {}) if isinstance(stats, dict) else {}
+        if failed:
+            top_reason = sorted(failed.items(), key=lambda item: item[1], reverse=True)[0]
+            return f"结论：今日无高确定性机会，建议空仓观察。今日没有最终候选。主要淘汰原因：{top_reason[0]}，剔除 {top_reason[1]} 只。"
+        return "结论：今日无高确定性机会，建议空仓观察。今日没有最终候选。主要原因：数据不足或硬过滤后无股票通过。"
+    if not has_high_confidence:
+        return f"结论：今日无高确定性机会，建议空仓观察。今日有候选股票，但最高分 {result.top3[0].score:.2f} 未达到 75 分高确定性阈值，因此只输出观察，不输出必须买入。"
+    return "今日存在高确定性候选，已输出今日首选和前三。"
+
+
+def _sector_leaderboard_lines(result: AkShareSelectionResult) -> list[str]:
+    if result.sector_rankings:
+        lines = ["| 排名 | 板块 | 类型 | 涨跌幅 | 热度 | 是否主线 |", "| ---: | --- | --- | ---: | ---: | --- |"]
+        for index, sector in enumerate(result.sector_rankings[:10], start=1):
+            lines.append(
+                f"| {index} | {sector.name} | {sector.sector_type} | {sector.pct_change:.2f}% | {sector.heat_score:.2f} | {'是' if sector.is_mainline else '否'} |"
+            )
+        return lines
+    if not result.top20:
+        return ["暂无板块数据。"]
+    rows: dict[str, dict] = {}
+    for item in result.top20:
+        row = rows.setdefault(item.sector, {"count": 0, "score": 0.0, "best": 0.0})
+        row["count"] += 1
+        row["score"] += item.score
+        row["best"] = max(row["best"], item.score)
+    lines = ["| 排名 | 板块 | Top20入选数 | 平均评分 | 最高评分 |", "| ---: | --- | ---: | ---: | ---: |"]
+    for index, (sector, row) in enumerate(
+        sorted(rows.items(), key=lambda item: (-item[1]["count"], -item[1]["best"], item[0]))[:10],
+        start=1,
+    ):
+        lines.append(f"| {index} | {sector} | {row['count']} | {row['score'] / row['count']:.2f} | {row['best']:.2f} |")
+    return lines
+
+
+def _top20_lines(result: AkShareSelectionResult) -> list[str]:
+    lines = ["| 排名 | 代码 | 名称 | 板块 | 总评分 | 收盘价 | 换手率 | 成交额(亿) | 操作建议 |", "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- |"]
+    if not result.top20:
+        lines.append("| - | 暂无 | 暂无 | - | - | - | - | - | 暂不操作 |")
+        return lines
+    for index, item in enumerate(result.top20, start=1):
+        lines.append(
+            f"| {index} | {item.code} | {item.name} | {item.sector} | {item.score:.2f} | {item.close:.2f} | {item.turnover_rate:.2f}% | {item.amount / 100_000_000:.2f} | {item.action} |"
+        )
+    return lines
+
+
+def _score_detail_lines(result: AkShareSelectionResult) -> list[str]:
+    lines = [
+        "| 排名 | 股票 | MA20 | MA5/MA10 | 量能 | 突破 | 市值 | 板块热度 | 风险扣分 | 总分计算 |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    if not result.top20:
+        lines.append("| - | 暂无 | - | - | - | - | - | - | - | - |")
+        return lines
+    for index, item in enumerate(result.top20, start=1):
+        breakdown = item.score_breakdown
+        ma20 = float(breakdown.get("MA20评分", item.ma20_score))
+        ma = float(breakdown.get("均线评分", item.ma_score))
+        volume = float(breakdown.get("量能评分", item.volume_score))
+        breakout = float(breakdown.get("突破评分", item.breakout_score))
+        cap = float(breakdown.get("市值评分", item.market_cap_score))
+        heat = float(breakdown.get("板块热度", item.sector_heat_bonus))
+        risk = float(breakdown.get("风险扣分", item.risk_score))
+        formula = f"{ma20:.1f}+{ma:.1f}+{volume:.1f}+{breakout:.1f}+{cap:.1f}+{heat:.1f}{risk:+.1f}={item.score:.1f}"
+        lines.append(
+            f"| {index} | {item.code} {item.name} | {ma20:.1f} | {ma:.1f} | {volume:.1f} | {breakout:.1f} | {cap:.1f} | {heat:.1f} | {risk:.1f} | {formula} |"
+        )
+    return lines
+
+
+def _elimination_stats_lines(result: AkShareSelectionResult) -> list[str]:
+    stats = result.elimination_stats or {}
+    lines = [
+        f"- 原始行情股票数：{stats.get('source_count', result.source_count)}",
+        f"- 主板过滤后：{stats.get('main_board_count', result.main_board_count)}",
+        f"- 进入评分池：{stats.get('scoring_universe_count', '未知')}",
+        f"- 指标计算成功：{stats.get('feature_valid_count', '未知')}",
+        f"- 指标计算失败：{stats.get('feature_invalid_count', '未知')}",
+        f"- 最终候选：{stats.get('final_count', result.scored_count)}",
+        "",
+        "| 淘汰条件 | 数量 |",
+        "| --- | ---: |",
+    ]
+    failed = stats.get("hard_filter_failed", {}) if isinstance(stats, dict) else {}
+    if not failed:
+        lines.append("| 暂无 | 0 |")
+        return lines
+    for reason, count in sorted(failed.items(), key=lambda item: item[1], reverse=True):
+        lines.append(f"| {reason} | {count} |")
+    return lines
 
 
 def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
     lines = [
-        "## 最近5日重复上榜观察池",
+        "## ⑥ 最近5日重复上榜（按次数排序）",
         "",
         "| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |",
         "| --- | ---: | ---: | ---: | ---: | --- |",

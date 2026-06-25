@@ -44,7 +44,7 @@ REPORT = """# 今日主板选股摘要: 2026-06-23
 """
 
 
-def test_build_today_stock_message_extracts_required_sections() -> None:
+def test_build_today_stock_message_uses_final_report_body() -> None:
     config = EmailConfig(
         smtp_host="smtp.gmail.com",
         smtp_port=587,
@@ -59,28 +59,16 @@ def test_build_today_stock_message_extracts_required_sections() -> None:
 
     assert message["Subject"] == "A股自动选股日报 2026-06-23【实时数据】"
     assert message["Message-ID"]
-    assert "【数据来源】" in body
-    assert "数据来源：实时数据" in body
-    assert body.index("【今日首选】") < body.index("【今日前三】")
-    assert body.index("【今日前三】") < body.index("【最近5日重复上榜统计】")
-    assert "股票代码：600160" in body
-    assert "股票名称：巨化股份" in body
-    assert "推荐等级：重点观察" in body
-    assert "推荐理由：最近5日上榜 2 次，连续上榜 2 天，今日排名第 2，总评分 69.00。" in body
-    assert "【今日前三】" in body
-    assert "股票代码：600183" in body
-    assert "股票名称：生益科技" in body
-    assert "总评分：73.30" in body
-    assert "【最近5日重复上榜统计】" in body
-    assert "上榜次数：2" in body
-    assert "连续上榜天数：2" in body
-    assert "【系统建议】" in body
-    assert "今日市场风险等级：谨慎" in body
-    assert "【数据验证】" in body
-    assert "数据源名称：Sina" in body
-    assert "数据日期：2026-06-23" in body
-    assert "is_realtime=true" in body
-    assert "formal_allowed=true" in body
+    assert body.startswith(REPORT.rstrip())
+    assert "## 今日推荐3只主板股票" in body
+    assert "### 1. 生益科技 (600183)" in body
+    assert "### 2. 巨化股份 (600160)" in body
+    assert "邮件审计" in body
+    assert "Git Commit：unknown" in body
+    assert "Workflow Run ID：local" in body
+    assert "today_stock.md SHA256：" in body
+    assert "Email Body SHA256：" in body
+    assert "Body matches today_stock：True" in body
 
 
 def test_failure_source_uses_failure_subject_and_no_first_pick() -> None:
@@ -100,9 +88,9 @@ def test_failure_source_uses_failure_subject_and_no_first_pick() -> None:
     body = message.get_content()
 
     assert message["Subject"] == "A股自动选股日报 2026-06-23【实时数据获取失败】"
-    assert "【实时数据获取失败】" in body
-    assert "【今日首选】" not in body
-    assert "未生成：实时数据获取失败。" in body
+    assert body.startswith(failed_report.rstrip())
+    assert "数据来源：实时数据获取失败" in body
+    assert "Body matches today_stock：True" in body
 
 
 def test_missing_email_secrets_are_reported(monkeypatch) -> None:

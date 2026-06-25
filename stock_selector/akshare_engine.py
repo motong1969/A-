@@ -131,6 +131,7 @@ class AkShareSelectionResult:
     top3_candidates: list[AkShareCandidate]
     top20: list[AkShareCandidate]
     ranked_candidates: list[AkShareCandidate]
+    elimination_stats: dict | None = None
 
     @property
     def top10(self) -> list[AkShareCandidate]:
@@ -291,6 +292,15 @@ class AkShareV1Engine:
         funds = self._load_funds()
         market_return_5d = self._market_return_5d(trade_date)
         universe = self._prioritize_scoring_universe(main_board, stock_sectors, funds, limit)
+        elimination_stats = {
+            "source_count": len(spot),
+            "main_board_count": len(main_board),
+            "scoring_universe_count": len(universe),
+            "feature_valid_count": 0,
+            "feature_invalid_count": 0,
+            "hard_filter_failed": {},
+            "final_count": 0,
+        }
         candidates = []
         for _, row in universe.iterrows():
             code = str(row["代码"]).zfill(6)
@@ -303,11 +313,19 @@ class AkShareV1Engine:
                     sector_return_10d=sector.pct_change / 100,
                 )
             except Exception:
+                elimination_stats["feature_invalid_count"] += 1
+                continue
+            elimination_stats["feature_valid_count"] += 1
+            rejection_reason = self._candidate_rejection_reason(row, features)
+            if rejection_reason:
+                failed = elimination_stats["hard_filter_failed"]
+                failed[rejection_reason] = failed.get(rejection_reason, 0) + 1
                 continue
             candidate = self._candidate(row, features, sector, funds.get(code, {}), market)
             if candidate is not None:
                 candidates.append(candidate)
         ranked = self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True))
+        elimination_stats["final_count"] = len(ranked)
         sector_rankings = sorted(sectors.values(), key=lambda item: item.rank or 999_999)
         return AkShareSelectionResult(
             trade_date,
@@ -320,6 +338,7 @@ class AkShareV1Engine:
             ranked[: self.settings.rules.top_n_candidates],
             ranked[: self.settings.rules.top_n_pool],
             ranked,
+            elimination_stats,
         )
 
     def _apply_sector_heat_bonus(self, ranked: list[AkShareCandidate]) -> list[AkShareCandidate]:
@@ -680,3 +699,31 @@ class AkShareV1Engine:
             reasons, risks,
             action,
         )
+
+    def _candidate_rejection_reason(self, spot, features) -> str | None:
+        rules = self.settings.rules
+        turnover = _number(spot.get("换手率"))
+        if not turnover:
+            turnover = _number(spot.get("turnover_rate"))
+        if not turnover:
+            turnover = float(features.get("latest_turnover_rate", 0.0))
+        amount = max(_number(spot.get("成交额")), float(features["latest_amount"]))
+        close = float(features["close"])
+        ma20 = float(features["ma20"])
+        if int(features["consecutive_limit_up"]) >= 3:
+            return "连续涨停>=3"
+        if int(features.get("latest_is_st", 0)):
+            return "ST标记"
+        if float(features["recent_10d_return"]) > rules.max_10d_return:
+            return "近10日涨幅>80%"
+        if amount < rules.min_daily_amount:
+            return "当日成交额<3亿元"
+        if turnover < rules.min_turnover_rate:
+            return "换手率<2%"
+        if close < ma20 * rules.min_close_vs_ma20:
+            return "收盘价<MA20*0.98"
+        if float(features["ma20_slope"]) < rules.max_ma20_down_slope:
+            return "MA20斜率<-1%"
+        if float(features["average_amount_5d"]) < rules.min_average_amount_5d:
+            return "5日均成交额<8000万"
+        return None

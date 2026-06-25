@@ -71,6 +71,8 @@ def main() -> int:
         print("formal_allowed=true")
         print(f"top10_csv={pool_path}")
         print(f"selection_history={history_path}")
+        for warning in getattr(fetcher, "data_warnings", []):
+            print(f"data_warning={warning}")
         if weekly_review_path is not None:
             print(f"weekly_review={weekly_review_path}")
         return 0

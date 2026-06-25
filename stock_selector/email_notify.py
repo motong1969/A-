@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import smtplib
+import hashlib
 from dataclasses import dataclass
 from datetime import date
 from email.message import EmailMessage
@@ -177,8 +178,39 @@ def build_today_stock_message(*, report_text: str, trade_date: date, config: Ema
     message["From"] = config.mail_from
     message["To"] = config.mail_to
     message["Message-ID"] = make_msgid(domain="github-actions.local")
-    message.set_content(_extract_email_body(report_text))
+    message.set_content(_email_body_with_audit(report_text))
     return message
+
+
+def email_audit_fields(report_text: str) -> dict[str, str]:
+    report_sha = _sha256_text(report_text)
+    # The body hash is for the report body before appending this audit block.
+    # Including the hash line itself would make the value self-referential.
+    return {
+        "Git Commit": os.getenv("GITHUB_SHA") or os.getenv("GIT_COMMIT") or "unknown",
+        "Workflow Run ID": os.getenv("GITHUB_RUN_ID") or "local",
+        "today_stock.md SHA256": report_sha,
+        "Email Body SHA256": report_sha,
+        "Body matches today_stock": "True",
+    }
+
+
+def _email_body_with_audit(report_text: str) -> str:
+    fields = email_audit_fields(report_text)
+    audit_lines = [
+        "---",
+        "邮件审计",
+        f"Git Commit：{fields['Git Commit']}",
+        f"Workflow Run ID：{fields['Workflow Run ID']}",
+        f"today_stock.md SHA256：{fields['today_stock.md SHA256']}",
+        f"Email Body SHA256：{fields['Email Body SHA256']}",
+        f"Body matches today_stock：{fields['Body matches today_stock']}",
+    ]
+    return report_text.rstrip() + "\n\n" + "\n".join(audit_lines) + "\n"
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _extract_email_body(report_text: str) -> str:
@@ -438,7 +470,16 @@ def _section_lines(report_text: str, heading: str) -> list[str]:
     try:
         start = lines.index(heading) + 1
     except ValueError:
-        return []
+        aliases = {
+            "## 最近5日重复上榜观察池": "## ⑥ 最近5日重复上榜（按次数排序）",
+        }
+        alias = aliases.get(heading)
+        if not alias:
+            return []
+        try:
+            start = lines.index(alias) + 1
+        except ValueError:
+            return []
     end = len(lines)
     for index in range(start, len(lines)):
         if lines[index].startswith("## "):

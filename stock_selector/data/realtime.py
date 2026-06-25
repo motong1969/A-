@@ -38,6 +38,7 @@ class RealtimeMainBoardFetcher:
         self.daily_cache_dir = self.cache_dir / "daily"
         self.data_source_name = ""
         self.source_errors: list[str] = []
+        self.data_warnings: list[str] = []
         self._spot: pd.DataFrame | None = None
         self._spot_by_code: dict[str, dict] = {}
         self._baostock = BaoStockDataFetcher(cache_dir=cache_dir)
@@ -62,10 +63,20 @@ class RealtimeMainBoardFetcher:
             raise RealtimeMarketDataError(
                 f"实时行情源 {self.data_source_name or 'none'} 没有返回任何本地主板股票池代码"
             )
-        if "名称" not in frame and "名称_pool" in frame:
-            frame["名称"] = frame["名称_pool"]
-        if "所属板块" not in frame and "所属板块_pool" in frame:
-            frame["所属板块"] = frame["所属板块_pool"]
+        if "名称_pool" in frame:
+            if "名称" not in frame:
+                frame["名称"] = frame["名称_pool"]
+            else:
+                live_name = frame["名称"].astype(str)
+                pool_name = frame["名称_pool"].astype(str)
+                frame["名称"] = pool_name.where(pool_name.ne("") & live_name.eq(frame["代码"].astype(str)), frame["名称"])
+        if "所属板块_pool" in frame:
+            if "所属板块" not in frame:
+                frame["所属板块"] = frame["所属板块_pool"]
+            else:
+                live_sector = frame["所属板块"].astype(str)
+                pool_sector = frame["所属板块_pool"].astype(str)
+                frame["所属板块"] = pool_sector.where(pool_sector.ne("") & live_sector.isin(["未映射", "nan", "None"]), frame["所属板块"])
         for column in ("涨跌幅", "成交额", "换手率", "收盘价", "成交量"):
             frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
         frame = frame.dropna(subset=["收盘价", "成交量", "涨跌幅"])
@@ -226,6 +237,26 @@ class RealtimeMainBoardFetcher:
         ).copy()
         if frame.empty:
             raise RealtimeMarketDataError(f"Tushare daily returned 0 rows for {self.trade_date.isoformat()}")
+        basic = client.daily_basic(
+            trade_date=self.trade_date.strftime("%Y%m%d"),
+            fields="ts_code,trade_date,turnover_rate,circ_mv,total_mv",
+        ).copy()
+        if basic.empty:
+            raise RealtimeMarketDataError(f"Tushare daily_basic returned 0 rows for {self.trade_date.isoformat()}")
+        frame = frame.merge(
+            basic[["ts_code", "trade_date", "turnover_rate", "circ_mv"]],
+            on=["ts_code", "trade_date"],
+            how="left",
+        )
+        frame["turnover_rate"] = pd.to_numeric(frame["turnover_rate"], errors="coerce")
+        missing_turnover = int(frame["turnover_rate"].isna().sum())
+        if missing_turnover:
+            self.data_warnings.append(
+                f"Tushare daily_basic missing turnover_rate for {missing_turnover} stock(s); dropped before selection"
+            )
+            frame = frame.dropna(subset=["turnover_rate"]).copy()
+        if frame.empty:
+            raise RealtimeMarketDataError("Tushare daily_basic did not provide any usable turnover_rate values")
         frame["代码"] = frame["ts_code"].astype(str).str.extract(r"(\d{6})", expand=False)
         frame["名称"] = frame["代码"]
         frame["收盘价"] = pd.to_numeric(frame["close"], errors="coerce")
@@ -235,8 +266,8 @@ class RealtimeMainBoardFetcher:
         frame["成交量"] = pd.to_numeric(frame["vol"], errors="coerce") * 100
         frame["成交额"] = pd.to_numeric(frame["amount"], errors="coerce") * 1000
         frame["涨跌幅"] = pd.to_numeric(frame["pct_chg"], errors="coerce")
-        frame["换手率"] = 0.0
-        frame["流通市值"] = 0.0
+        frame["换手率"] = frame["turnover_rate"]
+        frame["流通市值"] = pd.to_numeric(frame["circ_mv"], errors="coerce") * 10000
         return _normalize_realtime_spot(frame, source="Tushare")
 
     def _tushare(self):
