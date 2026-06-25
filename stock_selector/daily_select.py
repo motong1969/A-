@@ -180,6 +180,7 @@ def render_today_stock(
     has_high_confidence = best_score is not None and best_score >= 75
     actual_data_date = data_date or result.trade_date
     repeat_watch_pool = repeat_watch_pool or []
+    stats = result.elimination_stats or {}
     lines = [
         f"# A股收盘报告: {result.trade_date.isoformat()}",
         "",
@@ -237,6 +238,11 @@ def render_today_stock(
             "## ⑩ 数据来源验证",
             "",
             f"- 数据源名称：{data_source}",
+            f"- 历史K线来源：{stats.get('history_source', '未知')}",
+            f"- 历史K线成功股票数：{stats.get('history_success_count', '未知')}",
+            f"- 历史K线不足股票数：{stats.get('history_insufficient_count', '未知')}",
+            f"- 指标计算成功数：{stats.get('feature_valid_count', '未知')}",
+            f"- 指标计算失败数：{stats.get('feature_invalid_count', '未知')}",
             f"- 数据日期：{actual_data_date.isoformat()}",
             f"- is_realtime={'true' if is_realtime else 'false'}",
             f"- formal_allowed={'true' if formal_allowed else 'false'}",
@@ -412,13 +418,31 @@ def _elimination_stats_lines(result: AkShareSelectionResult) -> list[str]:
         f"- 原始行情股票数：{stats.get('source_count', result.source_count)}",
         f"- 主板过滤后：{stats.get('main_board_count', result.main_board_count)}",
         f"- 进入评分池：{stats.get('scoring_universe_count', '未知')}",
+        f"- 历史K线来源：{stats.get('history_source', '未知')}",
+        f"- 历史K线请求股票数：{stats.get('history_request_count', '未知')}",
+        f"- 历史K线成功股票数：{stats.get('history_success_count', '未知')}",
+        f"- 历史K线不足股票数：{stats.get('history_insufficient_count', '未知')}",
+        f"- 历史K线失败股票数：{stats.get('history_failure_count', '未知')}",
         f"- 指标计算成功：{stats.get('feature_valid_count', '未知')}",
         f"- 指标计算失败：{stats.get('feature_invalid_count', '未知')}",
         f"- 最终候选：{stats.get('final_count', result.scored_count)}",
         "",
-        "| 淘汰条件 | 数量 |",
+        "| 指标计算失败原因 | 数量 |",
         "| --- | ---: |",
     ]
+    feature_failed = stats.get("feature_invalid_reasons", {}) if isinstance(stats, dict) else {}
+    if feature_failed:
+        for reason, count in sorted(feature_failed.items(), key=lambda item: item[1], reverse=True):
+            lines.append(f"| {reason} | {count} |")
+    else:
+        lines.append("| 暂无 | 0 |")
+    lines.extend(
+        [
+            "",
+            "| 淘汰条件 | 数量 |",
+            "| --- | ---: |",
+        ]
+    )
     failed = stats.get("hard_filter_failed", {}) if isinstance(stats, dict) else {}
     if not failed:
         lines.append("| 暂无 | 0 |")

@@ -309,6 +309,7 @@ class AkShareV1Engine:
             "scoring_universe_count": len(universe),
             "feature_valid_count": 0,
             "feature_invalid_count": 0,
+            "feature_invalid_reasons": {},
             "hard_filter_failed": {},
             "final_count": 0,
         }
@@ -317,14 +318,18 @@ class AkShareV1Engine:
             code = str(row["代码"]).zfill(6)
             sector = stock_sectors.get(code, _row_sector(row))
             try:
+                bars = self.fetcher.stock_history(code, trade_date, days=160)
                 features = calculate_v1_features(
-                    self.fetcher.stock_history(code, trade_date, days=160),
+                    bars,
                     self.settings,
                     market_return_5d=market_return_5d,
                     sector_return_10d=sector.pct_change / 100,
                 )
-            except Exception:
+            except Exception as exc:
                 elimination_stats["feature_invalid_count"] += 1
+                reason = f"{type(exc).__name__}: {exc}"
+                failed_features = elimination_stats["feature_invalid_reasons"]
+                failed_features[reason] = failed_features.get(reason, 0) + 1
                 continue
             elimination_stats["feature_valid_count"] += 1
             rejection_reason = self._candidate_rejection_reason(row, features)
@@ -337,6 +342,10 @@ class AkShareV1Engine:
                 candidates.append(candidate)
         ranked = self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True))
         elimination_stats["final_count"] = len(ranked)
+        if hasattr(self.fetcher, "history_source_name"):
+            elimination_stats["history_source"] = getattr(self.fetcher, "history_source_name", "") or "未知"
+        if hasattr(self.fetcher, "history_stats"):
+            elimination_stats.update(getattr(self.fetcher, "history_stats", {}))
         sector_rankings = sorted(sectors.values(), key=lambda item: item.rank or 999_999)
         return AkShareSelectionResult(
             trade_date,

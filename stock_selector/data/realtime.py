@@ -38,8 +38,15 @@ class RealtimeMainBoardFetcher:
         self.cache_dir = Path(cache_dir)
         self.daily_cache_dir = self.cache_dir / "daily"
         self.data_source_name = ""
+        self.history_source_name = ""
         self.source_errors: list[str] = []
         self.data_warnings: list[str] = []
+        self.history_stats = {
+            "history_request_count": 0,
+            "history_success_count": 0,
+            "history_insufficient_count": 0,
+            "history_failure_count": 0,
+        }
         self._spot_is_full_market = False
         self._spot: pd.DataFrame | None = None
         self._spot_by_code: dict[str, dict] = {}
@@ -113,6 +120,10 @@ class RealtimeMainBoardFetcher:
         current = _live_row(live, self.trade_date)
         if current.empty:
             return pd.DataFrame()
+
+        if self.data_source_name == "Tushare":
+            return self._tushare_stock_history(code, current, end_date, days)
+
         start_date = end_date - timedelta(days=days * 2)
         cached = self._read_daily_cache(code)
         if not cached.empty:
@@ -127,6 +138,40 @@ class RealtimeMainBoardFetcher:
         )
         if combined.empty or combined.iloc[-1]["trade_date"] != end_date:
             return pd.DataFrame()
+        return combined
+
+    def _tushare_stock_history(self, code: str, current: pd.DataFrame, end_date: date, days: int) -> pd.DataFrame:
+        self.history_stats["history_request_count"] += 1
+        self.history_source_name = "Tushare daily"
+        ts_code = f"{code}.SH" if code.startswith(("5", "6", "9")) else f"{code}.SZ"
+        start_date = end_date - timedelta(days=max(days * 3, 260))
+        try:
+            frame = self._tushare().daily(
+                ts_code=ts_code,
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+                fields="ts_code,trade_date,open,high,low,close,pct_chg,vol,amount",
+            ).copy()
+        except Exception as exc:
+            self.history_stats["history_failure_count"] += 1
+            self.data_warnings.append(f"Tushare daily history failed for {code}: {type(exc).__name__}: {exc}")
+            return pd.DataFrame()
+        history = _normalize_tushare_history(frame)
+        history = history[history["trade_date"] < end_date].copy() if not history.empty else history
+        combined = pd.concat([history, current], ignore_index=True)
+        combined = (
+            combined.dropna(subset=["trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg"])
+            .drop_duplicates(subset=["trade_date"], keep="last")
+            .sort_values("trade_date")
+            .reset_index(drop=True)
+        )
+        if combined.empty or combined.iloc[-1]["trade_date"] != end_date:
+            self.history_stats["history_failure_count"] += 1
+            return pd.DataFrame()
+        if len(combined) < 121:
+            self.history_stats["history_insufficient_count"] += 1
+            return combined
+        self.history_stats["history_success_count"] += 1
         return combined
 
     def index_history(self, symbol: str, end_date: date, days: int = 30) -> pd.DataFrame:
@@ -425,7 +470,7 @@ def _rounded_limit_price(pre_close: float, ratio: float, direction: int) -> floa
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _normalize_tushare_history(frame: pd.DataFrame, end_date: date) -> pd.DataFrame:
+def _normalize_tushare_history(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
     normalized = frame.copy()
@@ -443,8 +488,6 @@ def _normalize_tushare_history(frame: pd.DataFrame, end_date: date) -> pd.DataFr
         ["trade_date", "open", "high", "low", "close", "vol", "amount", "turnover_rate", "pct_chg", "is_st"]
     ].dropna(subset=["trade_date", "close", "vol", "pct_chg"])
     normalized = normalized.sort_values("trade_date").reset_index(drop=True)
-    if normalized.empty or normalized.iloc[-1]["trade_date"] != end_date:
-        return pd.DataFrame()
     return normalized
 
 
