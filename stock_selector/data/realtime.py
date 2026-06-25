@@ -39,6 +39,7 @@ class RealtimeMainBoardFetcher:
         self.data_source_name = ""
         self.source_errors: list[str] = []
         self.data_warnings: list[str] = []
+        self._spot_is_full_market = False
         self._spot: pd.DataFrame | None = None
         self._spot_by_code: dict[str, dict] = {}
         self._baostock = BaoStockDataFetcher(cache_dir=cache_dir)
@@ -84,6 +85,18 @@ class RealtimeMainBoardFetcher:
             raise RealtimeMarketDataError("实时行情缺少当天收盘价、成交量或涨跌幅")
         self._spot_by_code = {str(row["代码"]).zfill(6): row.to_dict() for _, row in frame.iterrows()}
         return frame[["代码", "名称", "所属板块", "涨跌幅", "成交额", "换手率", "流通市值"]]
+
+    def full_market_spot(self) -> pd.DataFrame:
+        spot = self._load_realtime_spot()
+        if not self._spot_is_full_market:
+            raise RealtimeMarketDataError(f"{self.data_source_name or 'unknown'} 只提供部分股票行情，不能作为全A股大盘概况")
+        frame = spot.copy()
+        for column in ("涨跌幅", "成交额", "收盘价", "成交量"):
+            frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+        frame = frame.dropna(subset=["涨跌幅", "成交额", "收盘价", "成交量"])
+        if frame.empty:
+            raise RealtimeMarketDataError(f"{self.data_source_name or 'unknown'} 全A股行情缺少涨跌幅、成交额、收盘价或成交量")
+        return frame[["代码", "名称", "涨跌幅", "成交额", "收盘价", "成交量"]]
 
     def stock_history(self, symbol: str, end_date: date, days: int = 160) -> pd.DataFrame:
         if end_date != self.trade_date:
@@ -173,16 +186,17 @@ class RealtimeMainBoardFetcher:
         if self._spot is not None:
             return self._spot
         providers = (
-            ("Tushare", self._tushare_spot),
-            ("Eastmoney", self._eastmoney_spot),
-            ("Tencent", self._tencent_spot),
-            ("AkShare-Sina", self._sina_spot),
+            ("Tushare", self._tushare_spot, True),
+            ("Eastmoney", self._eastmoney_spot, True),
+            ("Tencent", self._tencent_spot, False),
+            ("AkShare-Sina", self._sina_spot, True),
         )
-        for name, provider in providers:
+        for name, provider, is_full_market in providers:
             try:
                 frame = provider()
                 if not frame.empty:
                     self.data_source_name = name
+                    self._spot_is_full_market = is_full_market
                     self._spot = frame
                     return frame
             except Exception as exc:

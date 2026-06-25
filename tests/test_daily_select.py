@@ -56,6 +56,9 @@ def test_render_today_stock_lists_top3_details() -> None:
     assert "## ⑧ 每只股票评分明细" in report
     assert "## ⑨ 今日淘汰统计" in report
     assert "## ⑩ 数据来源验证" in report
+    assert "- 统计口径：全A股" in report
+    assert "- 全A股上涨家数：" in report
+    assert "- 全A股成交额：" in report
 
 
 def test_render_today_stock_preserves_empty_position_message() -> None:

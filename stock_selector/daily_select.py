@@ -211,13 +211,7 @@ def render_today_stock(
             "",
             "## ④ 今日市场概况",
             "",
-            f"- 市场状态：{result.market.status}",
-            f"- 市场评分：{result.market.score:.2f}/100",
-            f"- 上涨家数占比：{result.market.up_ratio:.1%}",
-            f"- 涨停 / 跌停：{result.market.limit_up_count} / {result.market.limit_down_count}",
-            f"- 市场成交额：{result.market.total_amount / 100_000_000:.2f} 亿元",
-            f"- 通过硬过滤股票数量：{result.scored_count}",
-            f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
+            *_market_overview_lines(result, best_score),
             "",
             "## ⑤ 今日板块排行榜",
             "",
@@ -251,6 +245,33 @@ def render_today_stock(
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _market_overview_lines(result: AkShareSelectionResult, best_score: float | None) -> list[str]:
+    if not result.market.available:
+        return [
+            "大盘概况获取失败。",
+            f"- 原因：{result.market.note}",
+            f"- 通过硬过滤股票数量：{result.scored_count}",
+            f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
+        ]
+    data_date = result.market.data_date or result.trade_date
+    return [
+        f"- 统计口径：{result.market.scope}",
+        f"- 数据来源：{result.market.source}",
+        f"- 数据日期：{data_date.isoformat()}",
+        f"- 全A股样本数：{result.market.sample_count}",
+        f"- 全A股上涨家数：{result.market.up_count}",
+        f"- 全A股下跌家数：{result.market.down_count}",
+        f"- 全A股平盘家数：{result.market.flat_count}",
+        f"- 全A股涨停家数：{result.market.limit_up_count}",
+        f"- 全A股跌停家数：{result.market.limit_down_count}",
+        f"- 全A股成交额：{result.market.total_amount / 1_000_000_000_000:.2f} 万亿元",
+        f"- 市场状态：{result.market.status}",
+        f"- 市场评分：{result.market.score:.2f}/100",
+        f"- 通过硬过滤股票数量：{result.scored_count}",
+        f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
+    ]
 
 
 def _candidate_summary_lines(index: int, item, market_status: str) -> list[str]:

@@ -58,6 +58,9 @@ class MockAkShareDataFetcher:
             )
         return pd.DataFrame(rows)
 
+    def full_market_spot(self) -> pd.DataFrame:
+        return self.market_spot()
+
     def stock_history(self, symbol: str, end_date: date, days: int = 160) -> pd.DataFrame:
         self.history_requests.append(symbol)
         index = ALLOWED_CODES.index(symbol) + 1

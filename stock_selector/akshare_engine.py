@@ -57,6 +57,14 @@ class MarketEnvironment:
     limit_down_count: int
     total_amount: float
     note: str
+    scope: str = "未知"
+    source: str = "未知"
+    data_date: date | None = None
+    sample_count: int = 0
+    up_count: int = 0
+    down_count: int = 0
+    flat_count: int = 0
+    available: bool = True
 
 
 @dataclass(frozen=True)
@@ -398,8 +406,39 @@ class AkShareV1Engine:
         return frame.sort_values("_snapshot_score", ascending=False).head(requested)
 
     def _market_environment(self, spot: pd.DataFrame) -> MarketEnvironment:
-        pct = pd.to_numeric(spot.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").dropna()
-        amount = pd.to_numeric(spot.get("成交额", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        try:
+            if not hasattr(self.fetcher, "full_market_spot"):
+                raise RuntimeError("fetcher does not provide full-market spot data")
+            market_spot = self.fetcher.full_market_spot()
+        except Exception as exc:
+            return MarketEnvironment(
+                0.0,
+                "未知",
+                True,
+                0.0,
+                0,
+                0,
+                0.0,
+                f"大盘概况获取失败：{type(exc).__name__}: {exc}",
+                available=False,
+            )
+        pct = pd.to_numeric(market_spot.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").dropna()
+        amount = pd.to_numeric(market_spot.get("成交额", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        if pct.empty or amount.empty:
+            return MarketEnvironment(
+                0.0,
+                "未知",
+                True,
+                0.0,
+                0,
+                0,
+                0.0,
+                "大盘概况获取失败：全A股行情缺少涨跌幅或成交额",
+                available=False,
+            )
+        up_count = int((pct > 0).sum())
+        down_count = int((pct < 0).sum())
+        flat_count = int((pct == 0).sum())
         up_ratio = float((pct > 0).mean()) if not pct.empty else 0.0
         limit_up_count = int((pct >= 9.5).sum())
         limit_down_count = int((pct <= -9.5).sum())
@@ -408,7 +447,15 @@ class AkShareV1Engine:
         status = "观望" if score < 35 else ("谨慎" if score < 55 else "可交易")
         return MarketEnvironment(
             round(score, 2), status, True, up_ratio, limit_up_count, limit_down_count, float(amount.sum()),
-            "市场环境仅作为风险提示，不再阻止评分输出。",
+            "全A股市场环境，仅作为风险提示，不再阻止评分输出。",
+            scope="全A股",
+            source=str(getattr(self.fetcher, "data_source_name", "") or "实时行情"),
+            data_date=getattr(self.fetcher, "trade_date", None),
+            sample_count=len(pct),
+            up_count=up_count,
+            down_count=down_count,
+            flat_count=flat_count,
+            available=True,
         )
 
     def _load_funds(self) -> dict[str, dict[str, float]]:
