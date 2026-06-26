@@ -41,6 +41,8 @@ PERFORMANCE_SUMMARY_COLUMNS = [
     "period_end",
     "sample_scope",
     "sample_count",
+    "excluded_sample_count",
+    "quality_status",
     "win_rate_next_day",
     "avg_next_day_return",
     "win_rate_3d",
@@ -64,6 +66,17 @@ PERFORMANCE_COLUMNS = [
     "max_gain_5d",
     "max_drawdown_5d",
 ]
+
+MIN_PERFORMANCE_SAMPLE_COUNT = 3
+
+MAINBOARD_RETURN_LIMITS = {
+    "next_day_return": (-0.12, 0.12),
+    "return_3d": (-0.30, 0.35),
+    "return_5d": (-0.45, 0.75),
+    "return_10d": (-0.75, 2.00),
+    "max_gain_5d": (-0.45, 0.75),
+    "max_drawdown_5d": (-0.45, 0.75),
+}
 
 
 def update_selection_history(
@@ -174,9 +187,20 @@ def performance_summary_lines(
             lines.append(f"- {label}: 暂无统计。")
             continue
         latest = subset.sort_values("period_end").iloc[-1]
+        quality_status = str(latest.get("quality_status", "有效"))
+        excluded_count = int(latest.get("excluded_sample_count", 0) or 0)
+        if quality_status != "有效":
+            lines.append(
+                f"- {label}({latest['period_start']} 至 {latest['period_end']}): "
+                f"有效样本 {int(latest['sample_count'])}，"
+                f"剔除异常/模拟样本 {excluded_count}，"
+                f"{quality_status}，不输出胜率、平均收益和最大回撤。"
+            )
+            continue
         lines.append(
             f"- {label}({latest['period_start']} 至 {latest['period_end']}): "
             f"样本 {int(latest['sample_count'])}，"
+            f"剔除异常/模拟样本 {excluded_count}，"
             f"次日胜率 {_format_optional_pct(latest['win_rate_next_day'])}，"
             f"次日平均 {_format_optional_pct(latest['avg_next_day_return'])}，"
             f"5日平均 {_format_optional_pct(latest['avg_5d_return'])}，"
@@ -184,6 +208,7 @@ def performance_summary_lines(
             f"当前最有效因子 {latest.get('best_factor', '暂无')}。"
         )
     lines.append("权重调整原则：只用累计实盘验证数据评估因子有效性；样本不足时不主观调整评分权重。")
+    lines.append("价格口径：历史验证使用每日选股同一数据源的 close 字段；模拟样本、缺失值和超出主板涨跌幅合理范围的异常收益不进入胜率/回撤统计。")
     return lines
 
 
@@ -430,7 +455,16 @@ def _build_performance_summary(history: pd.DataFrame, as_of_date: date) -> pd.Da
             if not key:
                 continue
             period_start, period_end = key
-            rows.append(_summary_row(period_type, period_start, period_end, group))
+            clean_group = _valid_performance_rows(group)
+            rows.append(
+                _summary_row(
+                    period_type,
+                    period_start,
+                    period_end,
+                    clean_group,
+                    excluded_sample_count=len(group) - len(clean_group),
+                )
+            )
     return pd.DataFrame(rows, columns=PERFORMANCE_SUMMARY_COLUMNS).sort_values(
         ["period_type", "period_start", "period_end"]
     )
@@ -450,28 +484,53 @@ def _period_key(day: date, period_type: str) -> tuple[date, date] | None:
     return start, end
 
 
-def _summary_row(period_type: str, period_start: date, period_end: date, group: pd.DataFrame) -> dict:
+def _summary_row(
+    period_type: str,
+    period_start: date,
+    period_end: date,
+    group: pd.DataFrame,
+    *,
+    excluded_sample_count: int = 0,
+) -> dict:
     next_day = pd.to_numeric(group["next_day_return"], errors="coerce").dropna()
     return_3d = pd.to_numeric(group["return_3d"], errors="coerce").dropna()
     return_5d = pd.to_numeric(group["return_5d"], errors="coerce").dropna()
     drawdown = pd.to_numeric(group["max_drawdown_5d"], errors="coerce").dropna()
-    best_factor = _most_effective_factor(group)
+    enough_samples = len(group) >= MIN_PERFORMANCE_SAMPLE_COUNT
+    best_factor = _most_effective_factor(group) if enough_samples else None
     return {
         "period_type": period_type,
         "period_start": period_start,
         "period_end": period_end,
         "sample_scope": "top3",
         "sample_count": int(len(group)),
-        "win_rate_next_day": round(float((next_day > 0).mean()), 6) if not next_day.empty else pd.NA,
-        "avg_next_day_return": round(float(next_day.mean()), 6) if not next_day.empty else pd.NA,
-        "win_rate_3d": round(float((return_3d > 0).mean()), 6) if not return_3d.empty else pd.NA,
-        "avg_3d_return": round(float(return_3d.mean()), 6) if not return_3d.empty else pd.NA,
-        "win_rate_5d": round(float((return_5d > 0).mean()), 6) if not return_5d.empty else pd.NA,
-        "avg_5d_return": round(float(return_5d.mean()), 6) if not return_5d.empty else pd.NA,
-        "max_drawdown_5d": round(float(drawdown.min()), 6) if not drawdown.empty else pd.NA,
+        "excluded_sample_count": int(excluded_sample_count),
+        "quality_status": "有效" if enough_samples else "样本不足/异常值待确认",
+        "win_rate_next_day": round(float((next_day > 0).mean()), 6) if enough_samples and not next_day.empty else pd.NA,
+        "avg_next_day_return": round(float(next_day.mean()), 6) if enough_samples and not next_day.empty else pd.NA,
+        "win_rate_3d": round(float((return_3d > 0).mean()), 6) if enough_samples and not return_3d.empty else pd.NA,
+        "avg_3d_return": round(float(return_3d.mean()), 6) if enough_samples and not return_3d.empty else pd.NA,
+        "win_rate_5d": round(float((return_5d > 0).mean()), 6) if enough_samples and not return_5d.empty else pd.NA,
+        "avg_5d_return": round(float(return_5d.mean()), 6) if enough_samples and not return_5d.empty else pd.NA,
+        "max_drawdown_5d": round(float(drawdown.min()), 6) if enough_samples and not drawdown.empty else pd.NA,
         "best_factor": best_factor[0] if best_factor else "样本不足",
         "best_factor_corr_5d": round(float(best_factor[1]), 6) if best_factor else pd.NA,
     }
+
+
+def _valid_performance_rows(group: pd.DataFrame) -> pd.DataFrame:
+    if group.empty:
+        return group
+    valid = group.copy()
+    name_series = valid["name"].astype(str)
+    valid = valid[~name_series.str.contains("模拟|测试|mock", case=False, na=False)].copy()
+    if valid.empty:
+        return valid
+    abnormal = pd.Series(False, index=valid.index)
+    for column, (lower, upper) in MAINBOARD_RETURN_LIMITS.items():
+        values = pd.to_numeric(valid[column], errors="coerce")
+        abnormal = abnormal | (values.notna() & ((values < lower) | (values > upper)))
+    return valid[~abnormal].copy()
 
 
 def _rank_section(history: pd.DataFrame) -> list[str]:

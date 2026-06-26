@@ -194,6 +194,36 @@ def test_next_day_validation_and_performance_summary_database(tmp_path: Path) ->
     assert "权重调整原则" in "\n".join(summary_lines)
 
 
+def test_performance_summary_excludes_mock_and_abnormal_drawdown(tmp_path: Path) -> None:
+    history_path = tmp_path / "history" / "selection_history.csv"
+    summary_path = tmp_path / "history" / "performance_summary.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        _history_row("2026-06-02", 1, "000012", "主板模拟12", 38.5, next_day_return=-0.648718, return_5d=-0.623932, max_drawdown_5d=-0.648718),
+        _history_row("2026-06-02", 2, "605011", "主板模拟11", 38.2, next_day_return=0.920243, return_5d=0.686173, max_drawdown_5d=0.686173),
+        _history_row("2026-06-22", 1, "600001", "正式样本1", 80, next_day_return=0.02, return_5d=0.04, max_drawdown_5d=-0.01),
+        _history_row("2026-06-22", 2, "600002", "正式样本2", 79, next_day_return=-0.01, return_5d=0.02, max_drawdown_5d=-0.03),
+    ]
+    pd.DataFrame(rows).to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    update_performance_summary_database(
+        history_path,
+        output_path=summary_path,
+        as_of_date=date(2026, 6, 23),
+    )
+
+    summary = pd.read_csv(summary_path)
+    monthly = summary[summary["period_type"] == "monthly"].iloc[-1]
+    assert int(monthly["sample_count"]) == 2
+    assert int(monthly["excluded_sample_count"]) == 2
+    assert monthly["quality_status"] == "样本不足/异常值待确认"
+    assert pd.isna(monthly["max_drawdown_5d"])
+
+    summary_text = "\n".join(performance_summary_lines(summary_path))
+    assert "样本不足/异常值待确认" in summary_text
+    assert "-64.87%" not in summary_text
+
+
 def test_build_repeat_watch_pool_counts_recent_five_trading_days(tmp_path: Path) -> None:
     history_path = tmp_path / "history" / "selection_history.csv"
     history_path.parent.mkdir(parents=True, exist_ok=True)
