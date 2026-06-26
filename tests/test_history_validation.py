@@ -9,6 +9,9 @@ from stock_selector.history_validation import (
     build_repeat_watch_pool,
     generate_backtest_report,
     generate_weekly_review,
+    next_day_validation_lines,
+    performance_summary_lines,
+    update_performance_summary_database,
     update_selection_history,
 )
 
@@ -162,6 +165,35 @@ def test_generate_weekly_review_skips_non_friday(tmp_path: Path) -> None:
     assert weekly_path is None
 
 
+def test_next_day_validation_and_performance_summary_database(tmp_path: Path) -> None:
+    history_path = tmp_path / "history" / "selection_history.csv"
+    summary_path = tmp_path / "history" / "performance_summary.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        _history_row("2026-06-22", 1, "600001", "样本1", 80, next_day_return=0.02, return_3d=0.03, return_5d=0.04, max_drawdown_5d=-0.01),
+        _history_row("2026-06-22", 2, "600002", "样本2", 79, next_day_return=-0.01, return_3d=0.01, return_5d=0.02, max_drawdown_5d=-0.03),
+        _history_row("2026-06-22", 3, "600003", "样本3", 78, next_day_return=0.03, return_3d=0.02, return_5d=-0.01, max_drawdown_5d=-0.06),
+    ]
+    pd.DataFrame(rows).to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    lines = next_day_validation_lines(history_path, as_of_date=date(2026, 6, 23))
+    output = "\n".join(lines)
+    assert "验证对象：2026-06-22" in output
+    assert "前三名次日平均收益" in output
+
+    generated = update_performance_summary_database(
+        history_path,
+        output_path=summary_path,
+        as_of_date=date(2026, 6, 23),
+    )
+    assert generated == summary_path
+    summary = pd.read_csv(summary_path)
+    assert {"weekly", "monthly"}.issubset(set(summary["period_type"]))
+
+    summary_lines = performance_summary_lines(summary_path)
+    assert "权重调整原则" in "\n".join(summary_lines)
+
+
 def test_build_repeat_watch_pool_counts_recent_five_trading_days(tmp_path: Path) -> None:
     history_path = tmp_path / "history" / "selection_history.csv"
     history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +225,20 @@ def test_build_repeat_watch_pool_counts_recent_five_trading_days(tmp_path: Path)
     assert "600999" not in {item["code"] for item in pool}
 
 
-def _history_row(day: str, rank: int, code: str, name: str, score: float) -> dict:
+def _history_row(
+    day: str,
+    rank: int,
+    code: str,
+    name: str,
+    score: float,
+    *,
+    next_day_return=pd.NA,
+    return_3d=pd.NA,
+    return_5d=pd.NA,
+    return_10d=pd.NA,
+    max_gain_5d=pd.NA,
+    max_drawdown_5d=pd.NA,
+) -> dict:
     return {
         "date": day,
         "rank": rank,
@@ -209,10 +254,10 @@ def _history_row(day: str, rank: int, code: str, name: str, score: float) -> dic
         "risk_score": -1.0,
         "market_cap_score": 2.0,
         "sector_heat_bonus": 3.0,
-        "next_day_return": pd.NA,
-        "return_3d": pd.NA,
-        "return_5d": pd.NA,
-        "return_10d": pd.NA,
-        "max_gain_5d": pd.NA,
-        "max_drawdown_5d": pd.NA,
+        "next_day_return": next_day_return,
+        "return_3d": return_3d,
+        "return_5d": return_5d,
+        "return_10d": return_10d,
+        "max_gain_5d": max_gain_5d,
+        "max_drawdown_5d": max_drawdown_5d,
     }

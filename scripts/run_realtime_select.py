@@ -14,7 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stock_selector.akshare_engine import AkShareV1Engine
 from stock_selector.daily_select import _candidate_rows, render_result, render_today_stock
 from stock_selector.data.realtime import RealtimeMainBoardFetcher, RealtimeMarketDataError
-from stock_selector.history_validation import build_repeat_watch_pool, generate_weekly_review, update_selection_history
+from stock_selector.history_validation import (
+    build_repeat_watch_pool,
+    generate_weekly_review,
+    next_day_validation_lines,
+    performance_summary_lines,
+    update_performance_summary_database,
+    update_selection_history,
+)
 
 
 class RunTimeout(RuntimeError):
@@ -50,12 +57,15 @@ def main() -> int:
         report_path.write_text(render_result(result), encoding="utf-8")
         _candidate_frame(result, result.top20).to_csv(pool_path, index=False, encoding="utf-8-sig")
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=trade_date)
+        summary_path = update_performance_summary_database(history_path, as_of_date=trade_date)
         repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=trade_date)
         pd.DataFrame(repeat_watch_pool).to_csv(args.output_dir / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
         today_stock_path.write_text(
             render_today_stock(
                 result,
                 repeat_watch_pool=repeat_watch_pool,
+                next_day_validation=next_day_validation_lines(history_path, as_of_date=trade_date),
+                performance_summary=performance_summary_lines(summary_path),
                 data_source=fetcher.data_source_name,
                 data_date=trade_date,
                 is_realtime=True,
@@ -71,6 +81,7 @@ def main() -> int:
         print("formal_allowed=true")
         print(f"top10_csv={pool_path}")
         print(f"selection_history={history_path}")
+        print(f"performance_summary={summary_path}")
         for warning in getattr(fetcher, "data_warnings", []):
             print(f"data_warning={warning}")
         if weekly_review_path is not None:

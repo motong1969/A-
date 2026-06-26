@@ -120,6 +120,6 @@ jobs:
           name: daily-select-${{ github.run_id }}
           path: |
             reports/
-            history/selection_history.csv
+            history/
           if-no-files-found: error
           retention-days: 30

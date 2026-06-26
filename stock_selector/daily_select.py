@@ -10,7 +10,14 @@ import pandas as pd
 from stock_selector.akshare_engine import AkShareSelectionResult, AkShareV1Engine
 from stock_selector.data.baostock import BaoStockDataFetcher
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
-from stock_selector.history_validation import build_repeat_watch_pool, generate_weekly_review, update_selection_history
+from stock_selector.history_validation import (
+    build_repeat_watch_pool,
+    generate_weekly_review,
+    next_day_validation_lines,
+    performance_summary_lines,
+    update_performance_summary_database,
+    update_selection_history,
+)
 
 
 def _raise_run_timeout(signum, frame):
@@ -171,6 +178,8 @@ def render_today_stock(
     result: AkShareSelectionResult,
     repeat_watch_pool: list[dict] | None = None,
     *,
+    next_day_validation: list[str] | None = None,
+    performance_summary: list[str] | None = None,
     data_source: str = "实时数据",
     data_date: date | None = None,
     is_realtime: bool = True,
@@ -180,6 +189,8 @@ def render_today_stock(
     has_high_confidence = best_score is not None and best_score >= 75
     actual_data_date = data_date or result.trade_date
     repeat_watch_pool = repeat_watch_pool or []
+    next_day_validation = next_day_validation or ["暂无已完成的次日验证数据。"]
+    performance_summary = performance_summary or ["历史胜率数据库暂无可统计样本。"]
     stats = result.elimination_stats or {}
     lines = [
         f"# A股收盘报告: {result.trade_date.isoformat()}",
@@ -210,11 +221,15 @@ def render_today_stock(
             "",
             _no_pick_reason(result, has_high_confidence),
             "",
-            "## ④ 今日市场概况",
+            "## ④ 次日验证",
+            "",
+            *next_day_validation,
+            "",
+            "## ⑤ 今日市场概况",
             "",
             *_market_overview_lines(result, best_score),
             "",
-            "## ⑤ 今日板块排行榜",
+            "## ⑥ 今日板块排行榜",
             "",
             *_sector_leaderboard_lines(result),
             "",
@@ -223,19 +238,23 @@ def render_today_stock(
     lines.extend(_repeat_watch_pool_lines(repeat_watch_pool))
     lines.extend(
         [
-            "## ⑦ 今日所有候选股票（Top20）",
+            "## ⑧ 今日所有候选股票（Top20）",
             "",
             *_top20_lines(result),
             "",
-            "## ⑧ 每只股票评分明细",
+            "## ⑨ 每只股票评分明细",
             "",
             *_score_detail_lines(result),
             "",
-            "## ⑨ 今日淘汰统计",
+            "## ⑩ 今日淘汰统计",
             "",
             *_elimination_stats_lines(result),
             "",
-            "## ⑩ 数据来源验证",
+            "## ⑪ 历史胜率数据库",
+            "",
+            *performance_summary,
+            "",
+            "## ⑫ 数据来源验证",
             "",
             f"- 数据源名称：{data_source}",
             f"- 历史K线来源：{stats.get('history_source', '未知')}",
@@ -310,7 +329,6 @@ def _candidate_summary_lines(index: int, item, market_status: str) -> list[str]:
 def _first_pick_lines(result: AkShareSelectionResult, repeat_watch_pool: list[dict]) -> list[str]:
     if not result.top3:
         return ["今日首选：暂无", "原因：今日无通过硬过滤的候选股票。"]
-    top3_by_code = {item.code: item for item in result.top3}
     repeat_by_code = {item["code"]: item for item in repeat_watch_pool}
     candidates = []
     for item in result.top3:
@@ -330,11 +348,23 @@ def _first_pick_lines(result: AkShareSelectionResult, repeat_watch_pool: list[di
         level = "短线观察"
     else:
         level = "普通观察"
+    rank = result.top3.index(item) + 1
+    top_ranked = result.top3[0]
+    if rank == 1:
+        decision_note = "今日首选同时也是今日评分第一名。"
+    else:
+        decision_note = (
+            f"今日评分第一名是 {top_ranked.code} {top_ranked.name}，总评分 {top_ranked.score:.2f}；"
+            f"但今日首选优先考虑最近5日重复上榜次数和连续上榜天数，"
+            f"因此选择第 {rank} 名 {item.code} {item.name}。"
+        )
     return [
+        "决策规则：先比较最近5日上榜次数，再比较连续上榜天数，再比较今日总评分，最后比较今日排名；并列时选择今日总评分更高者。",
         f"股票代码：{item.code}",
         f"股票名称：{item.name}",
         f"推荐等级：{level}",
-        f"推荐理由：最近5日上榜 {list_count} 次，连续上榜 {continuous_days} 天，今日排名第 {result.top3.index(item) + 1}，总评分 {item.score:.2f}。",
+        f"推荐理由：最近5日上榜 {list_count} 次，连续上榜 {continuous_days} 天，今日排名第 {rank}，总评分 {item.score:.2f}。",
+        f"本次选择说明：{decision_note}",
     ]
 
 
@@ -454,7 +484,7 @@ def _elimination_stats_lines(result: AkShareSelectionResult) -> list[str]:
 
 def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
     lines = [
-        "## ⑥ 最近5日重复上榜（按次数排序）",
+        "## ⑦ 最近5日重复上榜（按次数排序）",
         "",
         "| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |",
         "| --- | ---: | ---: | ---: | ---: | --- |",
@@ -527,9 +557,15 @@ def main() -> int:
         pd.DataFrame(_candidate_rows(result, result.top20)).to_csv(pool_path, index=False, encoding="utf-8-sig")
         run_date = date.fromisoformat(args.date)
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=run_date)
+        summary_path = update_performance_summary_database(history_path, as_of_date=run_date)
         repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=run_date)
         pd.DataFrame(repeat_watch_pool).to_csv(args.output_dir / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
-        today_stock = render_today_stock(result, repeat_watch_pool=repeat_watch_pool)
+        today_stock = render_today_stock(
+            result,
+            repeat_watch_pool=repeat_watch_pool,
+            next_day_validation=next_day_validation_lines(history_path, as_of_date=run_date),
+            performance_summary=performance_summary_lines(summary_path),
+        )
         today_stock_path.write_text(today_stock, encoding="utf-8")
         weekly_review_path = generate_weekly_review(as_of_date=run_date)
         print(report)
@@ -537,6 +573,7 @@ def main() -> int:
         print(f"Markdown report: {report_path}")
         print(f"Today summary: {today_stock_path}")
         print(f"Selection history: {history_path}")
+        print(f"Performance summary: {summary_path}")
         if weekly_review_path is not None:
             print(f"Weekly review: {weekly_review_path}")
     except TimeoutError as exc:

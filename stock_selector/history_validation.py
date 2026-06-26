@@ -35,6 +35,23 @@ HISTORY_COLUMNS = [
     "max_drawdown_5d",
 ]
 
+PERFORMANCE_SUMMARY_COLUMNS = [
+    "period_type",
+    "period_start",
+    "period_end",
+    "sample_scope",
+    "sample_count",
+    "win_rate_next_day",
+    "avg_next_day_return",
+    "win_rate_3d",
+    "avg_3d_return",
+    "win_rate_5d",
+    "avg_5d_return",
+    "max_drawdown_5d",
+    "best_factor",
+    "best_factor_corr_5d",
+]
+
 RETURN_COLUMN_TO_OFFSET = {
     "next_day_return": 1,
     "return_3d": 3,
@@ -97,6 +114,77 @@ def generate_weekly_review(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_render_weekly_review(history, review_date), encoding="utf-8")
     return target
+
+
+def update_performance_summary_database(
+    history_path: Path | str = Path("history/selection_history.csv"),
+    *,
+    output_path: Path | str = Path("history/performance_summary.csv"),
+    as_of_date: date | None = None,
+) -> Path:
+    history = _load_history(Path(history_path))
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    summary = _build_performance_summary(history, as_of_date or date.today())
+    summary.to_csv(target, index=False, encoding="utf-8-sig")
+    return target
+
+
+def next_day_validation_lines(
+    history_path: Path | str = Path("history/selection_history.csv"),
+    *,
+    as_of_date: date | None = None,
+) -> list[str]:
+    history = _load_history(Path(history_path))
+    if history.empty:
+        return ["暂无历史推荐记录，无法验证次日表现。"]
+    scan_date = as_of_date or date.today()
+    completed = history[(history["date"] < scan_date) & history["next_day_return"].notna()].copy()
+    if completed.empty:
+        return ["暂无已完成的次日收益数据。"]
+    previous_date = max(completed["date"])
+    previous = completed[(completed["date"] == previous_date) & completed["rank"].between(1, 3, inclusive="both")]
+    if previous.empty:
+        return [f"{previous_date} 暂无前三名可验证记录。"]
+    lines = [f"验证对象：{previous_date} 今日前三在下一交易日的表现。"]
+    returns = pd.to_numeric(previous["next_day_return"], errors="coerce").dropna()
+    if not returns.empty:
+        lines.append(f"前三名次日平均收益：{returns.mean():.2%}，胜率：{(returns > 0).mean():.2%}，样本：{len(returns)}。")
+    for row in previous.sort_values("rank").itertuples():
+        lines.append(
+            f"- 第{int(row.rank)}名 {str(row.code).zfill(6)} {row.name}: "
+            f"次日涨跌幅 {_format_pct(row.next_day_return)}"
+        )
+    return lines
+
+
+def performance_summary_lines(
+    summary_path: Path | str = Path("history/performance_summary.csv"),
+) -> list[str]:
+    path = Path(summary_path)
+    if not path.exists():
+        return ["历史胜率数据库尚未生成。"]
+    summary = pd.read_csv(path)
+    if summary.empty:
+        return ["历史胜率数据库暂无可统计样本。"]
+    lines = []
+    for period_type, label in [("weekly", "最近一周"), ("monthly", "最近一月")]:
+        subset = summary[summary["period_type"] == period_type].copy()
+        if subset.empty:
+            lines.append(f"- {label}: 暂无统计。")
+            continue
+        latest = subset.sort_values("period_end").iloc[-1]
+        lines.append(
+            f"- {label}({latest['period_start']} 至 {latest['period_end']}): "
+            f"样本 {int(latest['sample_count'])}，"
+            f"次日胜率 {_format_optional_pct(latest['win_rate_next_day'])}，"
+            f"次日平均 {_format_optional_pct(latest['avg_next_day_return'])}，"
+            f"5日平均 {_format_optional_pct(latest['avg_5d_return'])}，"
+            f"最大回撤 {_format_optional_pct(latest['max_drawdown_5d'])}，"
+            f"当前最有效因子 {latest.get('best_factor', '暂无')}。"
+        )
+    lines.append("权重调整原则：只用累计实盘验证数据评估因子有效性；样本不足时不主观调整评分权重。")
+    return lines
 
 
 def build_repeat_watch_pool(
@@ -328,6 +416,64 @@ def _render_backtest_report(history: pd.DataFrame) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _build_performance_summary(history: pd.DataFrame, as_of_date: date) -> pd.DataFrame:
+    if history.empty:
+        return pd.DataFrame(columns=PERFORMANCE_SUMMARY_COLUMNS)
+    valid = history[history["date"] <= as_of_date].copy()
+    valid = valid[valid["rank"].between(1, 3, inclusive="both")].copy()
+    if valid.empty:
+        return pd.DataFrame(columns=PERFORMANCE_SUMMARY_COLUMNS)
+    rows = []
+    for period_type in ("weekly", "monthly"):
+        period_key = valid["date"].map(lambda day: _period_key(day, period_type))
+        for key, group in valid.groupby(period_key):
+            if not key:
+                continue
+            period_start, period_end = key
+            rows.append(_summary_row(period_type, period_start, period_end, group))
+    return pd.DataFrame(rows, columns=PERFORMANCE_SUMMARY_COLUMNS).sort_values(
+        ["period_type", "period_start", "period_end"]
+    )
+
+
+def _period_key(day: date, period_type: str) -> tuple[date, date] | None:
+    if pd.isna(day):
+        return None
+    if period_type == "weekly":
+        start = day - pd.Timedelta(days=day.weekday())
+        start = start.date() if hasattr(start, "date") else start
+        end = start + pd.Timedelta(days=4)
+        end = end.date() if hasattr(end, "date") else end
+        return start, end
+    start = day.replace(day=1)
+    end = (pd.Timestamp(start) + pd.offsets.MonthEnd(0)).date()
+    return start, end
+
+
+def _summary_row(period_type: str, period_start: date, period_end: date, group: pd.DataFrame) -> dict:
+    next_day = pd.to_numeric(group["next_day_return"], errors="coerce").dropna()
+    return_3d = pd.to_numeric(group["return_3d"], errors="coerce").dropna()
+    return_5d = pd.to_numeric(group["return_5d"], errors="coerce").dropna()
+    drawdown = pd.to_numeric(group["max_drawdown_5d"], errors="coerce").dropna()
+    best_factor = _most_effective_factor(group)
+    return {
+        "period_type": period_type,
+        "period_start": period_start,
+        "period_end": period_end,
+        "sample_scope": "top3",
+        "sample_count": int(len(group)),
+        "win_rate_next_day": round(float((next_day > 0).mean()), 6) if not next_day.empty else pd.NA,
+        "avg_next_day_return": round(float(next_day.mean()), 6) if not next_day.empty else pd.NA,
+        "win_rate_3d": round(float((return_3d > 0).mean()), 6) if not return_3d.empty else pd.NA,
+        "avg_3d_return": round(float(return_3d.mean()), 6) if not return_3d.empty else pd.NA,
+        "win_rate_5d": round(float((return_5d > 0).mean()), 6) if not return_5d.empty else pd.NA,
+        "avg_5d_return": round(float(return_5d.mean()), 6) if not return_5d.empty else pd.NA,
+        "max_drawdown_5d": round(float(drawdown.min()), 6) if not drawdown.empty else pd.NA,
+        "best_factor": best_factor[0] if best_factor else "样本不足",
+        "best_factor_corr_5d": round(float(best_factor[1]), 6) if best_factor else pd.NA,
+    }
+
+
 def _rank_section(history: pd.DataFrame) -> list[str]:
     lines = []
     rank_labels = {1: "第一名平均收益", 2: "第二名平均收益", 3: "第三名平均收益"}
@@ -539,4 +685,10 @@ def _most_effective_factor(top3: pd.DataFrame) -> tuple[str, float] | None:
 def _format_pct(value) -> str:
     if pd.isna(value):
         return "暂无数据"
+    return f"{float(value):.2%}"
+
+
+def _format_optional_pct(value) -> str:
+    if pd.isna(value):
+        return "暂无"
     return f"{float(value):.2%}"
