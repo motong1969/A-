@@ -221,15 +221,19 @@ def render_today_stock(
             "",
             _no_pick_reason(result, has_high_confidence),
             "",
-            "## ④ 次日验证",
+            "## ④ 为什么今天不买",
+            "",
+            *_why_not_buy_lines(result),
+            "",
+            "## ⑤ 次日验证",
             "",
             *next_day_validation,
             "",
-            "## ⑤ 今日市场概况",
+            "## ⑥ 今日市场概况",
             "",
             *_market_overview_lines(result, best_score),
             "",
-            "## ⑥ 今日板块排行榜",
+            "## ⑦ 今日板块排行榜",
             "",
             *_sector_leaderboard_lines(result),
             "",
@@ -238,23 +242,23 @@ def render_today_stock(
     lines.extend(_repeat_watch_pool_lines(repeat_watch_pool))
     lines.extend(
         [
-            "## ⑧ 今日所有候选股票（Top20）",
+            "## ⑨ 今日所有候选股票（Top20）",
             "",
             *_top20_lines(result),
             "",
-            "## ⑨ 每只股票评分明细",
+            "## ⑩ 每只股票评分明细",
             "",
             *_score_detail_lines(result),
             "",
-            "## ⑩ 今日淘汰统计",
+            "## ⑪ 今日淘汰统计",
             "",
             *_elimination_stats_lines(result),
             "",
-            "## ⑪ 历史胜率数据库",
+            "## ⑫ 历史胜率数据库",
             "",
             *performance_summary,
             "",
-            "## ⑫ 数据来源验证",
+            "## ⑬ 数据来源验证",
             "",
             f"- 数据源名称：{data_source}",
             f"- 历史K线来源：{stats.get('history_source', '未知')}",
@@ -381,6 +385,74 @@ def _no_pick_reason(result: AkShareSelectionResult, has_high_confidence: bool) -
     return "今日存在高确定性候选，已输出今日首选和前三。"
 
 
+def _why_not_buy_lines(result: AkShareSelectionResult) -> list[str]:
+    if not result.best:
+        return ["今日没有通过硬过滤的候选股票，因此不能形成买入观察对象。"]
+    item = result.best
+    threshold = 75.0
+    gap = round(max(threshold - float(item.score), 0.0), 2)
+    breakdown = item.score_breakdown
+    ma20 = float(breakdown.get("MA20评分", item.ma20_score))
+    ma = float(breakdown.get("均线评分", item.ma_score))
+    volume = float(breakdown.get("量能评分", item.volume_score))
+    breakout = float(breakdown.get("突破评分", item.breakout_score))
+    cap = float(breakdown.get("市值评分", item.market_cap_score))
+    heat = float(breakdown.get("板块热度", item.sector_heat_bonus))
+    risk = float(breakdown.get("风险扣分", item.risk_score))
+    lines = [
+        f"分析对象：当前总分第一名 {item.code} {item.name}。",
+        f"- 当前总分：{item.score:.2f}",
+        f"- 买入观察阈值：{threshold:.2f}",
+    ]
+    if gap <= 0:
+        lines.append("- 结论：总分已达到买入观察阈值，本模块不构成禁止买入理由，仍需结合风险等级和仓位控制。")
+    else:
+        lines.append(f"- 距离阈值还差：{gap:.2f} 分")
+    lines.extend(
+        [
+            "",
+            "| 因子 | 当前得分 | 理论上限 | 距离满分 |",
+            "| --- | ---: | ---: | ---: |",
+            f"| MA20 | {ma20:.2f} | 30.00 | {max(30.0 - ma20, 0.0):.2f} |",
+            f"| MA5/MA10 | {ma:.2f} | 25.00 | {max(25.0 - ma, 0.0):.2f} |",
+            f"| 成交量 | {volume:.2f} | 15.00 | {max(15.0 - volume, 0.0):.2f} |",
+            f"| 平台突破 | {breakout:.2f} | 15.00 | {max(15.0 - breakout, 0.0):.2f} |",
+            f"| 市值 | {cap:.2f} | 10.00 | {max(10.0 - cap, 0.0):.2f} |",
+            f"| 板块热度 | {heat:.2f} | 5.00 | {max(5.0 - heat, 0.0):.2f} |",
+            f"| 风险扣分 | {risk:.2f} | 0.00 | {abs(min(risk, 0.0)):.2f} |",
+            "",
+        ]
+    )
+    if gap > 0:
+        lines.extend(_threshold_gap_explanation(gap, volume, breakout, heat, risk))
+    else:
+        lines.append("补分诊断：当前不缺分，后续重点观察风险扣分是否继续扩大。")
+    return lines
+
+
+def _threshold_gap_explanation(gap: float, volume: float, breakout: float, heat: float, risk: float) -> list[str]:
+    opportunities = [
+        ("板块热度", max(5.0 - heat, 0.0), "板块热度不足"),
+        ("成交量", max(15.0 - volume, 0.0), "成交量确认不足"),
+        ("平台突破", max(15.0 - breakout, 0.0), "突破强度不足"),
+        ("风险扣分", abs(min(risk, 0.0)), "风险扣分过高"),
+    ]
+    enough = [item for item in opportunities if item[1] >= gap]
+    if enough:
+        factor, room, reason = sorted(enough, key=lambda item: (item[1], item[0]))[0]
+        return [
+            f"补分诊断：只需要改善约 {gap:.2f} 分即可达到 75。",
+            f"- 最小可解释缺口：{factor} 仍有 {room:.2f} 分空间，主要问题是{reason}。",
+            f"- 直观解释：如果{factor}改善 {gap:.2f} 分，理论上即可跨过 75；若不能改善，则继续保持观察。",
+        ]
+    factor, room, reason = max(opportunities, key=lambda item: item[1])
+    return [
+        f"补分诊断：还差 {gap:.2f} 分，单一因子改善不足以完全补齐。",
+        f"- 最大短板：{factor} 仍有 {room:.2f} 分空间，主要问题是{reason}。",
+        "- 直观解释：需要多个因子同时改善，或风险扣分明显下降，才值得从观察升级为买入观察。",
+    ]
+
+
 def _sector_leaderboard_lines(result: AkShareSelectionResult) -> list[str]:
     if result.sector_rankings:
         lines = ["| 排名 | 板块 | 类型 | 涨跌幅 | 热度 | 是否主线 |", "| ---: | --- | --- | ---: | ---: | --- |"]
@@ -484,7 +556,7 @@ def _elimination_stats_lines(result: AkShareSelectionResult) -> list[str]:
 
 def _repeat_watch_pool_lines(repeat_watch_pool: list[dict]) -> list[str]:
     lines = [
-        "## ⑦ 最近5日重复上榜（按次数排序）",
+        "## ⑧ 最近5日重复上榜（按次数排序）",
         "",
         "| 股票 | 今日排名 | 连续上榜天数 | 最近5日出现次数 | 最新评分 | 操作建议 |",
         "| --- | ---: | ---: | ---: | ---: | --- |",
