@@ -1,4 +1,5 @@
-﻿period_type,period_start,period_end,sample_scope,sample_count,win_rate_next_day,avg_next_day_return,win_rate_3d,avg_3d_return,win_rate_5d,avg_5d_return,max_drawdown_5d,best_factor,best_factor_corr_5d
-monthly,2026-06-01,2026-06-30,top3,12,0.777778,0.087413,0.833333,0.108582,0.666667,0.093453,-0.648718,样本不足,
-weekly,2026-06-01,2026-06-05,top3,3,0.666667,0.176993,0.666667,0.134843,0.666667,0.093453,-0.648718,样本不足,
-weekly,2026-06-22,2026-06-26,top3,9,0.833333,0.042622,1.0,0.082321,,,,样本不足,
+﻿period_type,period_start,period_end,sample_scope,sample_count,excluded_sample_count,quality_status,win_rate_next_day,avg_next_day_return,win_rate_3d,avg_3d_return,win_rate_5d,avg_5d_return,max_drawdown_5d,best_factor,best_factor_corr_5d
+monthly,2026-06-01,2026-06-30,top3,12,3,有效,0.666667,0.029235,1.0,0.078133,1.0,0.063449,-0.01782,样本不足,
+weekly,2026-06-01,2026-06-05,top3,0,3,样本不足/异常值待确认,,,,,,,,样本不足,
+weekly,2026-06-22,2026-06-26,top3,9,0,有效,0.666667,0.029235,1.0,0.078133,1.0,0.063449,-0.01782,样本不足,
+weekly,2026-06-29,2026-07-03,top3,3,0,有效,,,,,,,,样本不足,
