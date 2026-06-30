@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import os
 from pathlib import Path
 import signal
 import sys
@@ -48,6 +49,7 @@ def main() -> int:
     signal.alarm(args.timeout_seconds)
     fetcher = None
     try:
+        print("Loaded TUSHARE_TOKEN" if os.getenv("TUSHARE_TOKEN") else "Missing TUSHARE_TOKEN")
         fetcher = RealtimeMainBoardFetcher(trade_date=trade_date, pool_path=args.pool)
         result = AkShareV1Engine(fetcher=fetcher, sector_member_limit=args.sector_limit).run(trade_date, limit=args.limit)
         _validate_formal_result(result, fetcher.data_source_name, trade_date)
@@ -76,9 +78,11 @@ def main() -> int:
         weekly_review_path = generate_weekly_review(as_of_date=trade_date)
         print(f"realtime_report={today_stock_path}")
         print(f"data_source={fetcher.data_source_name}")
+        print(f"Realtime data source = {fetcher.data_source_name}")
         print(f"data_date={trade_date.isoformat()}")
         print("is_realtime=true")
         print("formal_allowed=true")
+        print("formal_allowed = true")
         print(f"top10_csv={pool_path}")
         print(f"selection_history={history_path}")
         print(f"performance_summary={summary_path}")

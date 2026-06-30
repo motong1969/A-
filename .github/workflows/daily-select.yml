@@ -71,13 +71,20 @@ jobs:
             exit "$status"
           fi
 
-      - name: Run BaoStock selector
+      - name: Run Tushare realtime selector
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
         id: selector
         continue-on-error: true
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           set +e
-          python3 scripts/run_daily_select.py --mode baostock --date "${{ steps.run_date.outputs.value }}" --sector-limit 0
+          if [ -n "${TUSHARE_TOKEN:-}" ]; then
+            echo "Loaded TUSHARE_TOKEN"
+          else
+            echo "Missing TUSHARE_TOKEN"
+          fi
+          python3 scripts/run_realtime_select.py --date "${{ steps.run_date.outputs.value }}" --sector-limit 0 --timeout-seconds 180
           status=$?
           set -e
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
@@ -93,7 +100,7 @@ jobs:
         run: |
           python3 scripts/build_fallback_report.py \
             --date "${{ steps.run_date.outputs.value }}" \
-            --reason "BaoStock 收盘选股执行失败，系统发送失败原因心跳邮件。selector_exit_code=${{ steps.selector.outputs.exit_code }}"
+            --reason "Tushare 实时选股执行失败，系统发送失败原因心跳邮件。selector_exit_code=${{ steps.selector.outputs.exit_code }}"
 
       - name: Build non-trading day report
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'false'
