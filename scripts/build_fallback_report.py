@@ -13,6 +13,8 @@ HISTORY_HEADER = (
     "return_5d,return_10d,max_gain_5d,max_drawdown_5d\n"
 )
 
+PERFORMANCE_HEADER = "date,total_picks,validated_picks,win_rate,avg_next_day_return,avg_3d_return,avg_5d_return,avg_10d_return\n"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build fallback today_stock.md when selector times out or fails.")
@@ -21,12 +23,16 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, default=Path("reports/baostock-top10-2026-06-23.csv"))
     parser.add_argument("--output", type=Path, default=Path("reports/today_stock.md"))
     parser.add_argument("--history", type=Path, default=Path("history/selection_history.csv"))
+    parser.add_argument("--performance", type=Path, default=Path("history/performance_summary.csv"))
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.history.parent.mkdir(parents=True, exist_ok=True)
+    args.performance.parent.mkdir(parents=True, exist_ok=True)
     if not args.history.exists():
         args.history.write_text(HISTORY_HEADER, encoding="utf-8")
+    if not args.performance.exists():
+        args.performance.write_text(PERFORMANCE_HEADER, encoding="utf-8")
 
     if not args.csv.exists():
         args.output.write_text(_empty_failure_report(args.date, args.reason), encoding="utf-8")

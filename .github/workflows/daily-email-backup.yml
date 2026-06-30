@@ -34,19 +34,43 @@ jobs:
       - name: Restore reports and history from daily-data
         run: bash scripts/ci_restore_daily_data.sh daily-data || true
 
-      - name: Run realtime selector
-        env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: python3 scripts/run_realtime_select.py --sector-limit 0 --timeout-seconds 180
+      - name: Resolve run date
+        id: run_date
+        run: echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Run BaoStock selector
+        id: selector
+        continue-on-error: true
+        run: |
+          set +e
+          python3 scripts/run_daily_select.py --mode baostock --date "${{ steps.run_date.outputs.value }}" --sector-limit 0
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 0 ]; then
+            echo "selector_status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "selector_status=failed" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Build selector failure heartbeat report
+        if: steps.selector.outputs.selector_status == 'failed'
+        run: |
+          python3 scripts/build_fallback_report.py \
+            --date "${{ steps.run_date.outputs.value }}" \
+            --reason "BaoStock 备份邮件选股执行失败，系统发送失败原因心跳邮件。selector_exit_code=${{ steps.selector.outputs.exit_code }}"
 
       - name: Send Gmail notification
+        if: always()
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python3 scripts/send_daily_email.py --fail-on-error
+        run: python3 scripts/send_daily_email.py --fail-on-error --date "${{ steps.run_date.outputs.value }}"
 
       - name: Upload email artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: daily-email-backup-${{ github.run_id }}

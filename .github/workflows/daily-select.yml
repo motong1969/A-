@@ -71,11 +71,29 @@ jobs:
             exit "$status"
           fi
 
-      - name: Run realtime selector
+      - name: Run BaoStock selector
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
-        env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: python3 scripts/run_realtime_select.py --date "${{ steps.run_date.outputs.value }}" --sector-limit 0 --timeout-seconds 180
+        id: selector
+        continue-on-error: true
+        run: |
+          set +e
+          python3 scripts/run_daily_select.py --mode baostock --date "${{ steps.run_date.outputs.value }}" --sector-limit 0
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 0 ]; then
+            echo "selector_status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "selector_status=failed" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Build selector failure heartbeat report
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true' && steps.selector.outputs.selector_status == 'failed'
+        run: |
+          python3 scripts/build_fallback_report.py \
+            --date "${{ steps.run_date.outputs.value }}" \
+            --reason "BaoStock 收盘选股执行失败，系统发送失败原因心跳邮件。selector_exit_code=${{ steps.selector.outputs.exit_code }}"
 
       - name: Build non-trading day report
         if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'false'
@@ -86,7 +104,7 @@ jobs:
         run: python3 scripts/build_email_test_report.py --date 2026-06-23
 
       - name: Generate backtest report
-        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true' && steps.selector.outputs.selector_status == 'success'
         run: python3 report_backtest.py || true
 
       - name: Send Gmail test notification
@@ -98,7 +116,7 @@ jobs:
         run: python3 scripts/send_daily_email.py --fail-on-error --date 2026-06-23
 
       - name: Send Gmail notification
-        if: github.event.inputs.email_test_only != 'true' && (steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false')
+        if: always() && github.event.inputs.email_test_only != 'true' && (steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false')
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -106,7 +124,7 @@ jobs:
         run: python3 scripts/send_daily_email.py --fail-on-error --date "${{ steps.run_date.outputs.value }}"
 
       - name: Publish reports and history to daily-data
-        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true'
+        if: github.event.inputs.email_test_only != 'true' && steps.trading_day.outputs.is_trading_day == 'true' && steps.selector.outputs.selector_status == 'success'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,7 +132,7 @@ jobs:
           bash scripts/ci_publish_daily_data.sh daily-data "daily select ${{ steps.run_date.outputs.value }}"
 
       - name: Upload artifacts
-        if: github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false'
+        if: always() && (github.event.inputs.email_test_only == 'true' || steps.trading_day.outputs.is_trading_day == 'true' || steps.trading_day.outputs.is_trading_day == 'false')
         uses: actions/upload-artifact@v4
         with:
           name: daily-select-${{ github.run_id }}
