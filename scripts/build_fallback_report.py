@@ -24,6 +24,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("reports/today_stock.md"))
     parser.add_argument("--history", type=Path, default=Path("history/selection_history.csv"))
     parser.add_argument("--performance", type=Path, default=Path("history/performance_summary.csv"))
+    parser.add_argument(
+        "--allow-stale-candidates",
+        action="store_true",
+        help="Reuse the fallback CSV candidates. By default failure/heartbeat reports do not force recommendations.",
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +39,7 @@ def main() -> int:
     if not args.performance.exists():
         args.performance.write_text(PERFORMANCE_HEADER, encoding="utf-8")
 
-    if not args.csv.exists():
+    if not args.allow_stale_candidates or not args.csv.exists():
         args.output.write_text(_empty_failure_report(args.date, args.reason), encoding="utf-8")
         pd.DataFrame(columns=["code", "name", "today_rank", "continuous_days", "list_count_5d", "latest_score", "advice"]).to_csv(
             args.output.parent / "repeat-watch-pool.csv",
