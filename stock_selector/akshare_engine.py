@@ -294,11 +294,12 @@ class AkShareV1Engine:
         spot = self.fetcher.market_spot()
         market = self._market_environment(spot)
         risk_notice_codes = self._risk_notice_codes(trade_date)
-        main_board = spot[
-            spot["代码"].astype(str).map(lambda code: is_allowed_main_board_code(code, self.settings))
-            & ~spot["名称"].astype(str).map(self._risk_name)
-            & ~spot["代码"].astype(str).map(lambda code: str(code).zfill(6) in risk_notice_codes)
-        ]
+        codes = spot["代码"].astype("object").map(str)
+        names = spot["名称"].astype("object").map(str)
+        allowed_code_mask = codes.map(lambda code: is_allowed_main_board_code(code, self.settings)).astype(bool)
+        risk_name_mask = names.map(self._risk_name).astype(bool)
+        risk_notice_mask = codes.map(lambda code: str(code).zfill(6) in risk_notice_codes).astype(bool)
+        main_board = spot[allowed_code_mask & ~risk_name_mask & ~risk_notice_mask]
         sectors, stock_sectors = self._load_sectors()
         funds = self._load_funds()
         market_return_5d = self._market_return_5d(trade_date)
