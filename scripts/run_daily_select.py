@@ -8,5 +8,4 @@ from stock_selector.daily_select import main
 
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())
