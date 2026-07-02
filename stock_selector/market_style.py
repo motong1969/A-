@@ -1056,7 +1056,12 @@ def _rotation_reasons(
     reasons = []
     if directions and directions[0].strength >= 75:
         reasons.append(f"{directions[0].name}资金强度达到{directions[0].strength:.1f}，成为短线资金集中方向。")
-    if weak_directions and (not directions or weak_directions[0].name != directions[0].name) and weak_directions[0].strength >= 50:
+    if (
+        weak_directions
+        and weak_directions[0].name not in INTERNAL_STYLE_GROUPS
+        and (not directions or weak_directions[0].name != directions[0].name)
+        and weak_directions[0].strength >= 50
+    ):
         reasons.append(f"{weak_directions[0].name}转弱，资金从弱势方向撤出。")
     if _index_value(index_returns, "创业板指", "5d") < 0:
         reasons.append("创业板最近5日走弱，成长方向承压。")

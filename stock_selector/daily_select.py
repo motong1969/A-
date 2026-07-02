@@ -336,12 +336,16 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
         ]
     capital_lines = [
         f"- {item.stars} {item.name}（强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
-        for item in style.capital_directions[:6]
+        for item in style.capital_directions
+        if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
     ] or ["- 暂无明确资金方向"]
+    capital_lines = capital_lines[:6]
     weak_lines = [
         f"- {item.stars} {item.name}（弱势强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
-        for item in style.weak_directions[:5]
+        for item in style.weak_directions
+        if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
     ] or ["- 暂无明确弱势方向"]
+    weak_lines = weak_lines[:5]
     decision_lines = _trading_decision_lines(style)
     lines = [
         style.style_sentence,
