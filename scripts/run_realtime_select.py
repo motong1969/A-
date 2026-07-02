@@ -23,6 +23,7 @@ from stock_selector.history_validation import (
     update_performance_summary_database,
     update_selection_history,
 )
+from stock_selector.market_style import update_market_style_history
 
 
 class RunTimeout(RuntimeError):
@@ -60,6 +61,7 @@ def main() -> int:
         _candidate_frame(result, result.top20).to_csv(pool_path, index=False, encoding="utf-8-sig")
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=trade_date)
         summary_path = update_performance_summary_database(history_path, as_of_date=trade_date)
+        style_history_path = update_market_style_history(result.market_style)
         repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=trade_date)
         pd.DataFrame(repeat_watch_pool).to_csv(args.output_dir / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
         today_stock_path.write_text(
@@ -86,6 +88,7 @@ def main() -> int:
         print(f"top10_csv={pool_path}")
         print(f"selection_history={history_path}")
         print(f"performance_summary={summary_path}")
+        print(f"market_style_history={style_history_path}")
         for warning in getattr(fetcher, "data_warnings", []):
             print(f"data_warning={warning}")
         if weekly_review_path is not None:

@@ -58,7 +58,8 @@ def test_rankings_return_top10_top3_and_best() -> None:
                     + item.breakout_score
                     + item.market_cap_score
                     + item.sector_heat_bonus
-                    + item.risk_score,
+                    + item.risk_score
+                    + item.score_breakdown.get("市场风格调整", 0.0),
                     1,
                 ),
                 100.0,

@@ -364,7 +364,23 @@ class RealtimeMainBoardFetcher:
 
     def _tushare_index_history(self, symbol: str, end_date: date, days: int) -> pd.DataFrame:
         client = self._tushare()
-        ts_code = "000001.SH" if symbol in {"sh000001", "000001", "sh.000001"} else symbol
+        ts_code = {
+            "sh000001": "000001.SH",
+            "000001": "000001.SH",
+            "sh.000001": "000001.SH",
+            "sz399001": "399001.SZ",
+            "399001": "399001.SZ",
+            "sz.399001": "399001.SZ",
+            "sz399006": "399006.SZ",
+            "399006": "399006.SZ",
+            "sz.399006": "399006.SZ",
+            "sh000688": "000688.SH",
+            "000688": "000688.SH",
+            "sh.000688": "000688.SH",
+            "bj899050": "899050.BJ",
+            "899050": "899050.BJ",
+            "bj.899050": "899050.BJ",
+        }.get(str(symbol).lower(), symbol)
         start_date = end_date - timedelta(days=days * 2)
         frame = client.index_daily(
             ts_code=ts_code,

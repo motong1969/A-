@@ -18,6 +18,7 @@ from stock_selector.history_validation import (
     update_performance_summary_database,
     update_selection_history,
 )
+from stock_selector.market_style import update_market_style_history
 
 
 def _raise_run_timeout(signum, frame):
@@ -201,6 +202,10 @@ def render_today_stock(
         f"是否允许作为正式选股依据：{'是' if formal_allowed else '否'}",
         "数据来源：实时数据" if is_realtime and formal_allowed else "数据来源：实时数据获取失败",
         "",
+        "## 市场风格判断",
+        "",
+        *_market_style_lines(result),
+        "",
         "## ① 今日首选",
         "",
         *_first_pick_lines(result, repeat_watch_pool),
@@ -314,6 +319,43 @@ def _market_overview_lines(result: AkShareSelectionResult, best_score: float | N
             f"- 最高分：{best_score:.2f}" if best_score is not None else "- 最高分：无",
         ]
     )
+    return lines
+
+
+def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
+    style = getattr(result, "market_style", None)
+    if style is None:
+        return [
+            "当前市场不是单边主线，而是风格数据不足。",
+            "- 今日主导风格：暂无明确风格",
+            "- 最近5日主导风格：暂无明确风格",
+            "- 最近20日主导风格：暂无明确风格",
+            "- 当前操作：只观察",
+        ]
+    lines = [
+        style.style_sentence,
+        f"- 今日主导风格：{style.today_style}",
+        f"- 最近5日主导风格：{style.dominant_5d}",
+        f"- 最近20日主导风格：{style.dominant_20d}",
+        f"- 当前领涨指数：{style.leading_index}",
+        f"- 是否发生高低切：{'是' if style.high_low_switch else '否'}",
+        f"- 科技股是否退潮：{'是' if style.tech_retreat else '否'}",
+        f"- 创业板/科创板是否重新走强：{'是' if style.growth_board_recovering else '否'}",
+        f"- 传统低位股是否只是短线补涨：{'是' if style.traditional_short_rebound else '否'}",
+        f"- 当前操作建议：{style.action_advice}",
+        "",
+        "| 风格组 | 上涨 | 下跌 | 涨停 | 跌停 | 平均涨跌幅 | 成交额占比 | 资金强度 | 5日趋势 | 10日趋势 | 20日趋势 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for stats in style.group_stats.values():
+        lines.append(
+            f"| {stats.name} | {stats.up_count} | {stats.down_count} | {stats.limit_up_count} | "
+            f"{stats.limit_down_count} | {stats.average_pct:.2f}% | {stats.amount_share:.2f}% | "
+            f"{stats.fund_strength:.2f} | {stats.trend_5d:.2f}% | {stats.trend_10d:.2f}% | {stats.trend_20d:.2f}% |"
+        )
+    lines.extend(["", "| 周期 | 强弱排序 |", "| --- | --- |"])
+    for window, ranking in style.index_rankings.items():
+        lines.append(f"| {window} | {' > '.join(ranking)} |")
     return lines
 
 
@@ -492,11 +534,11 @@ def _top20_lines(result: AkShareSelectionResult) -> list[str]:
 
 def _score_detail_lines(result: AkShareSelectionResult) -> list[str]:
     lines = [
-        "| 排名 | 股票 | MA20 | MA5/MA10 | 量能 | 突破 | 市值 | 板块热度 | 风险扣分 | 总分计算 |",
-        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| 排名 | 股票 | MA20 | MA5/MA10 | 量能 | 突破 | 市值 | 板块热度 | 风格调整 | 风险扣分 | 总分计算 |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     if not result.top20:
-        lines.append("| - | 暂无 | - | - | - | - | - | - | - | - |")
+        lines.append("| - | 暂无 | - | - | - | - | - | - | - | - | - |")
         return lines
     for index, item in enumerate(result.top20, start=1):
         breakdown = item.score_breakdown
@@ -506,10 +548,11 @@ def _score_detail_lines(result: AkShareSelectionResult) -> list[str]:
         breakout = float(breakdown.get("突破评分", item.breakout_score))
         cap = float(breakdown.get("市值评分", item.market_cap_score))
         heat = float(breakdown.get("板块热度", item.sector_heat_bonus))
+        style = float(breakdown.get("市场风格调整", 0.0))
         risk = float(breakdown.get("风险扣分", item.risk_score))
-        formula = f"{ma20:.1f}+{ma:.1f}+{volume:.1f}+{breakout:.1f}+{cap:.1f}+{heat:.1f}{risk:+.1f}={item.score:.1f}"
+        formula = f"{ma20:.1f}+{ma:.1f}+{volume:.1f}+{breakout:.1f}+{cap:.1f}+{heat:.1f}{style:+.1f}{risk:+.1f}={item.score:.1f}"
         lines.append(
-            f"| {index} | {item.code} {item.name} | {ma20:.1f} | {ma:.1f} | {volume:.1f} | {breakout:.1f} | {cap:.1f} | {heat:.1f} | {risk:.1f} | {formula} |"
+            f"| {index} | {item.code} {item.name} | {ma20:.1f} | {ma:.1f} | {volume:.1f} | {breakout:.1f} | {cap:.1f} | {heat:.1f} | {style:.1f} | {risk:.1f} | {formula} |"
         )
     return lines
 
@@ -630,6 +673,7 @@ def main() -> int:
         run_date = date.fromisoformat(args.date)
         history_path = update_selection_history(result, fetcher=fetcher, as_of_date=run_date)
         summary_path = update_performance_summary_database(history_path, as_of_date=run_date)
+        style_history_path = update_market_style_history(result.market_style)
         repeat_watch_pool = build_repeat_watch_pool(history_path, as_of_date=run_date)
         pd.DataFrame(repeat_watch_pool).to_csv(args.output_dir / "repeat-watch-pool.csv", index=False, encoding="utf-8-sig")
         today_stock = render_today_stock(
@@ -646,6 +690,7 @@ def main() -> int:
         print(f"Today summary: {today_stock_path}")
         print(f"Selection history: {history_path}")
         print(f"Performance summary: {summary_path}")
+        print(f"Market style history: {style_history_path}")
         if weekly_review_path is not None:
             print(f"Weekly review: {weekly_review_path}")
     except TimeoutError as exc:

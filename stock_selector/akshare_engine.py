@@ -7,6 +7,7 @@ import pandas as pd
 
 from stock_selector.config import MainBoardStrategySettings
 from stock_selector.data.akshare import AkShareDataFetcher
+from stock_selector.market_style import MarketStyleSnapshot, analyze_market_style, classify_stock, market_style_score_adjustment
 
 
 def _number(value, default: float = 0.0) -> float:
@@ -143,6 +144,7 @@ class AkShareSelectionResult:
     top20: list[AkShareCandidate]
     ranked_candidates: list[AkShareCandidate]
     elimination_stats: dict | None = None
+    market_style: MarketStyleSnapshot | None = None
 
     @property
     def top10(self) -> list[AkShareCandidate]:
@@ -166,6 +168,18 @@ def is_allowed_main_board_code(code: str, settings: MainBoardStrategySettings | 
     rules = (settings or MainBoardStrategySettings()).rules
     normalized = str(code).zfill(6)
     return len(normalized) == 6 and normalized.startswith(rules.allowed_code_prefixes)
+
+
+def _feature_style_group(code: str, sector: str, features: dict) -> str:
+    return_20d = float(features.get("stock_return_20d", 0.0))
+    return_60d = float(features.get("stock_return_60d", 0.0))
+    return_5d = float(features.get("stock_return_5d", 0.0))
+    volume_ratio = float(features.get("volume_ratio", 0.0))
+    if return_20d >= 0.18:
+        return "高位强势股"
+    if return_60d <= 0.05 and return_5d > 0.03 and volume_ratio >= 1.2:
+        return "低位补涨股"
+    return classify_stock(code=code, sector=sector)
 
 
 def calculate_v1_features(
@@ -207,6 +221,8 @@ def calculate_v1_features(
     volatility_20d = float(pct.tail(20).abs().mean())
     stock_return_5d = (latest_close / float(close.iloc[-6]) - 1) if float(close.iloc[-6]) else 0.0
     stock_return_10d = (latest_close / float(close.iloc[-11]) - 1) if float(close.iloc[-11]) else 0.0
+    stock_return_20d = (latest_close / float(close.iloc[-21]) - 1) if len(close) >= 21 and float(close.iloc[-21]) else 0.0
+    stock_return_60d = (latest_close / float(close.iloc[-61]) - 1) if len(close) >= 61 and float(close.iloc[-61]) else 0.0
     high_close_60d = float(close.tail(60).max())
     high_close_120d = float(close.tail(120).max())
     consecutive_limit_up = 0
@@ -247,6 +263,8 @@ def calculate_v1_features(
         "close_120d_high": latest_close >= high_close_120d,
         "stock_return_5d": stock_return_5d,
         "stock_return_10d": stock_return_10d,
+        "stock_return_20d": stock_return_20d,
+        "stock_return_60d": stock_return_60d,
         "beats_market_5d": stock_return_5d > market_return_5d,
         "beats_sector_10d": stock_return_10d > sector_return_10d,
         "recent_10d_return": stock_return_10d,
@@ -315,6 +333,7 @@ class AkShareV1Engine:
             "final_count": 0,
         }
         candidates = []
+        feature_rows = []
         for _, row in universe.iterrows():
             code = str(row["代码"]).zfill(6)
             sector = stock_sectors.get(code, _row_sector(row))
@@ -333,6 +352,20 @@ class AkShareV1Engine:
                 failed_features[reason] = failed_features.get(reason, 0) + 1
                 continue
             elimination_stats["feature_valid_count"] += 1
+            code = str(row["代码"]).zfill(6)
+            sector = stock_sectors.get(code, _row_sector(row))
+            feature_rows.append(
+                {
+                    "code": code,
+                    "sector": sector.name,
+                    "return_5d": float(features.get("stock_return_5d", 0.0)),
+                    "return_10d": float(features.get("stock_return_10d", 0.0)),
+                    "return_20d": float(features.get("stock_return_20d", 0.0)),
+                    "return_60d": float(features.get("stock_return_60d", 0.0)),
+                    "volume_ratio": float(features.get("volume_ratio", 0.0)),
+                    "style_group": _feature_style_group(code, sector.name, features),
+                }
+            )
             rejection_reason = self._candidate_rejection_reason(row, features)
             if rejection_reason:
                 failed = elimination_stats["hard_filter_failed"]
@@ -341,7 +374,11 @@ class AkShareV1Engine:
             candidate = self._candidate(row, features, sector, funds.get(code, {}), market)
             if candidate is not None:
                 candidates.append(candidate)
-        ranked = self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True))
+        market_style = self._market_style(trade_date, spot, feature_rows)
+        ranked = self._apply_market_style_adjustment(
+            self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True)),
+            market_style,
+        )
         elimination_stats["final_count"] = len(ranked)
         if hasattr(self.fetcher, "history_source_name"):
             elimination_stats["history_source"] = getattr(self.fetcher, "history_source_name", "") or "未知"
@@ -360,6 +397,7 @@ class AkShareV1Engine:
             ranked[: self.settings.rules.top_n_pool],
             ranked,
             elimination_stats,
+            market_style,
         )
 
     def _apply_sector_heat_bonus(self, ranked: list[AkShareCandidate]) -> list[AkShareCandidate]:
@@ -382,6 +420,58 @@ class AkShareV1Engine:
                 )
             )
         return sorted(adjusted, key=lambda item: item.score, reverse=True)
+
+    def _apply_market_style_adjustment(
+        self,
+        ranked: list[AkShareCandidate],
+        market_style: MarketStyleSnapshot | None,
+    ) -> list[AkShareCandidate]:
+        adjusted = []
+        for item in ranked:
+            delta, reason = market_style_score_adjustment(
+                market_style,
+                code=item.code,
+                sector=item.sector,
+                score=item.score,
+            )
+            if not delta:
+                adjusted.append(item)
+                continue
+            breakdown = dict(item.score_breakdown)
+            breakdown["市场风格调整"] = round(delta, 1)
+            risks = list(item.risks)
+            reasons = list(item.reasons)
+            if delta < 0:
+                risks.append(reason)
+            else:
+                reasons.append(reason)
+            new_score = round(max(0.0, min(100.0, item.score + delta)), 1)
+            adjusted.append(
+                replace(
+                    item,
+                    score=new_score,
+                    score_breakdown=breakdown,
+                    risks=risks,
+                    reasons=reasons,
+                    action=_threshold_label(new_score),
+                )
+            )
+        return sorted(adjusted, key=lambda item: item.score, reverse=True)
+
+    def _market_style(self, trade_date: date, spot: pd.DataFrame, feature_rows: list[dict]) -> MarketStyleSnapshot | None:
+        try:
+            market_spot = self.fetcher.full_market_spot() if hasattr(self.fetcher, "full_market_spot") else spot
+        except Exception:
+            market_spot = spot
+        try:
+            return analyze_market_style(
+                trade_date=trade_date,
+                fetcher=self.fetcher,
+                market_spot=market_spot,
+                feature_rows=feature_rows,
+            )
+        except Exception:
+            return None
 
     def _market_return_5d(self, trade_date: date) -> float:
         try:
