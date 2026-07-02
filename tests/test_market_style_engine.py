@@ -6,7 +6,7 @@ from datetime import date
 import pandas as pd
 
 from stock_selector.akshare_engine import AkShareV1Engine
-from stock_selector.daily_select import render_today_stock
+from stock_selector.daily_select import _market_style_lines, render_today_stock
 from stock_selector.data.akshare_mock import MockAkShareDataFetcher
 from stock_selector.market_style import STYLE_HISTORY_COLUMNS, analyze_market_style, update_market_style_history
 
@@ -100,3 +100,57 @@ def test_market_style_report_and_score_adjustment_are_rendered() -> None:
     assert "### 风格预测升级" in report
     assert "当前市场不是单边主线" in report
     assert any("市场风格调整" in item.score_breakdown for item in result.top20)
+
+
+def test_mainline_requires_real_stock_or_top20_evidence(tmp_path) -> None:
+    history_path = tmp_path / "market_style_history.csv"
+    fetcher = MarketStyleFetcher()
+    spot = pd.DataFrame(
+        [
+            {"代码": "600001", "名称": "普通股票", "所属板块": "未映射", "涨跌幅": 1.0, "成交额": 100_000_000},
+        ]
+    )
+    snapshot = analyze_market_style(
+        trade_date=date(2026, 7, 2),
+        fetcher=fetcher,
+        market_spot=spot,
+        feature_rows=[],
+        sector_rankings=[SectorRow("PCB", "概念", 1, 95, 5.2, 1_200_000_000, 9.0)],
+        history_path=history_path,
+    )
+    assert snapshot.trading_decision is not None
+    assert snapshot.trading_decision.mainlines == []
+
+    class Result:
+        market_style = snapshot
+
+    report = "\n".join(_market_style_lines(Result()))
+    assert "主线数据未接入" in report
+    assert "| 1 | PCB |" not in report
+
+
+def test_market_emotion_excludes_st_delisting_and_bse(tmp_path) -> None:
+    history_path = tmp_path / "market_style_history.csv"
+    fetcher = MarketStyleFetcher()
+    spot = pd.DataFrame(
+        [
+            {"代码": "600001", "名称": "正常股份", "所属板块": "PCB", "涨跌幅": 10.0, "成交额": 200_000_000, "涨停标记": 1, "跌停标记": 0},
+            {"代码": "920001", "名称": "北交样本", "所属板块": "PCB", "涨跌幅": 30.0, "成交额": 300_000_000, "涨停标记": 1, "跌停标记": 0},
+            {"代码": "600002", "名称": "ST样本", "所属板块": "PCB", "涨跌幅": 5.0, "成交额": 400_000_000, "涨停标记": 1, "跌停标记": 0},
+            {"代码": "600003", "名称": "退市样本", "所属板块": "PCB", "涨跌幅": -10.0, "成交额": 500_000_000, "涨停标记": 0, "跌停标记": 1},
+        ]
+    )
+    snapshot = analyze_market_style(
+        trade_date=date(2026, 7, 2),
+        fetcher=fetcher,
+        market_spot=spot,
+        feature_rows=[],
+        sector_rankings=[SectorRow("PCB", "概念", 1, 95, 5.2, 1_200_000_000, 9.0)],
+        history_path=history_path,
+    )
+    assert snapshot.trading_decision is not None
+    emotion = snapshot.trading_decision.emotion
+    assert emotion.limit_up_count == 1
+    assert emotion.limit_down_count == 0
+    assert snapshot.trading_decision.mainlines[0].up_count == 1
+    assert snapshot.trading_decision.mainlines[0].amount == 200_000_000

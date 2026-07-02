@@ -120,6 +120,7 @@ TOPIC_KEYWORDS = {
     "煤炭": ("煤炭",),
     "电力": ("电力", "公用事业"),
     "有色": ("有色", "铜", "铝", "黄金"),
+    "化工": ("化工", "化学原料", "化学制品", "C26"),
     "稀土": ("稀土", "磁材"),
     "锂电": ("锂电", "锂矿", "电池"),
     "固态电池": ("固态电池",),
@@ -808,10 +809,11 @@ def _trading_decision(
     rotation_fast: bool,
     prediction: StylePrediction,
 ) -> TradingDecisionSnapshot:
-    mainlines = _mainline_stats(frame, directions, [])
-    emotion = _market_emotion(frame, history)
+    eligible_frame = _eligible_market_frame(frame)
+    mainlines = _mainline_stats(eligible_frame, directions, [])
+    emotion = _market_emotion(eligible_frame, history)
     rhythm = _market_rhythm(emotion, mainlines, index_returns, rotation_fast)
-    rotation_reasons = _rotation_reasons(history, index_returns, directions, weak_directions, group_stats)
+    rotation_reasons = _rotation_reasons(history, index_returns, directions, weak_directions, group_stats, mainlines)
     prediction_detail = _prediction_detail(history, prediction, trade_date)
     position = _position_advice(emotion, rhythm, mainlines, rotation_fast)
     risk = _risk_assessment(emotion, rhythm, index_returns, mainlines)
@@ -851,6 +853,8 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
         amount = pd.to_numeric(subset.get("成交额", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
         limit_up = pd.to_numeric(subset.get("涨停标记", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
         top20_count = sum(1 for item in top20_list if _topic_label(str(getattr(item, "sector", ""))) == topic)
+        if subset.empty and top20_count == 0:
+            continue
         amount_score = amount.sum() / total_amount * 100 if total_amount else 0.0
         strength = max(
             0.0,
@@ -864,7 +868,7 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
             ),
         )
         leaders = _mainline_leaders(topic, subset, top20_list)
-        rows[topic] = MainlineStats(
+        candidate = MainlineStats(
             name=topic,
             rank=0,
             stars=_stars(strength),
@@ -879,6 +883,8 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
             persistence_stars=_stars(strength * 0.65 + min(max(direction.main_net_inflow, 0.0) / 100_000_000, 25)),
             persistence_reason=_persistence_reason(strength, direction.main_net_inflow, top20_count),
         )
+        if _has_mainline_evidence(candidate):
+            rows[topic] = candidate
     ranked = sorted(rows.values(), key=lambda item: item.strength, reverse=True)[:8]
     return [
         MainlineStats(**{**item.__dict__, "rank": index})
@@ -894,8 +900,7 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
         top20_count = len(matched)
         leaders = _mainline_leaders_from_candidates(matched) or item.leaders
         strength = max(0.0, min(100.0, item.strength + top20_count * 4))
-        updated.append(
-            MainlineStats(
+        candidate = MainlineStats(
                 name=item.name,
                 rank=item.rank,
                 stars=_stars(strength),
@@ -910,7 +915,8 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
                 persistence_stars=_stars(strength * 0.75),
                 persistence_reason=_persistence_reason(strength, item.main_net_inflow, top20_count),
             )
-        )
+        if _has_mainline_evidence(candidate):
+            updated.append(candidate)
     existing = {item.name for item in updated}
     grouped: dict[str, list[object]] = {}
     for item in top20_list:
@@ -921,8 +927,7 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
     for topic, stocks in grouped.items():
         amount = sum(float(getattr(stock, "amount", 0.0) or 0.0) for stock in stocks)
         strength = max(0.0, min(100.0, 45 + len(stocks) * 8 + min(amount / 1_000_000_000, 25)))
-        updated.append(
-            MainlineStats(
+        candidate = MainlineStats(
                 name=topic,
                 rank=len(updated) + 1,
                 stars=_stars(strength),
@@ -933,7 +938,8 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
                 persistence_stars=_stars(strength * 0.7),
                 persistence_reason=_persistence_reason(strength, 0.0, len(stocks)),
             )
-        )
+        if _has_mainline_evidence(candidate):
+            updated.append(candidate)
     ranked = sorted(updated, key=lambda value: value.strength, reverse=True)
     return [MainlineStats(**{**item.__dict__, "rank": index}) for index, item in enumerate(ranked, start=1)]
 
@@ -990,6 +996,7 @@ def _leader_reason(amount: float, pct: float, turnover: float, breakout: bool, c
 
 
 def _market_emotion(frame: pd.DataFrame, history: pd.DataFrame) -> MarketEmotion:
+    frame = _eligible_market_frame(frame)
     pct = pd.to_numeric(frame.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
     up_ratio = float((pct > 0).mean() * 100) if len(pct) else 0.0
     limit_up = pd.to_numeric(frame.get("涨停标记", pd.Series(0, index=frame.index)), errors="coerce").fillna(0.0)
@@ -1024,21 +1031,31 @@ def _market_emotion(frame: pd.DataFrame, history: pd.DataFrame) -> MarketEmotion
 def _market_rhythm(emotion: MarketEmotion, mainlines: list[MainlineStats], index_returns: dict[str, dict[str, float]], rotation_fast: bool) -> RhythmAssessment:
     index_5d = _index_value(index_returns, "上证指数", "5d")
     leader_strength = mainlines[0].strength if mainlines else 0.0
-    if emotion.temperature < 25 or emotion.limit_down_count > emotion.limit_up_count:
+    active_mainlines = len([item for item in mainlines[:3] if item.strength >= 55])
+    if not mainlines:
+        if emotion.temperature < 25 or emotion.limit_down_count > emotion.limit_up_count:
+            return RhythmAssessment("冰点期", _stars(emotion.temperature), emotion.temperature, "主线数据未接入，且过滤ST、退市和北交所后市场温度偏低。")
+        if emotion.temperature >= 50:
+            return RhythmAssessment("活跃期", _stars(emotion.temperature), emotion.temperature, "主线数据未接入，但过滤后赚钱效应仍保持活跃。")
+        return RhythmAssessment("退潮期", _stars(emotion.temperature), emotion.temperature, "主线数据未接入，赚钱效应不足，按退潮观察。")
+    if emotion.temperature < 20 or (emotion.limit_down_count > emotion.limit_up_count and emotion.temperature < 45):
         stage = "冰点期"
-        reason = "跌停或亏钱效应占优，市场温度低。"
-    elif leader_strength >= 85 and emotion.temperature >= 75 and emotion.relay_score >= 70:
+        reason = "过滤ST、退市和北交所后，市场温度低且亏钱效应占优。"
+    elif leader_strength >= 85 and emotion.temperature >= 70 and emotion.relay_score >= 65:
         stage = "高潮期"
         reason = "主线强度高，涨停和接力情绪同步升温。"
-    elif rotation_fast or (mainlines and len([item for item in mainlines[:3] if item.strength >= 55]) >= 3):
+    elif rotation_fast or active_mainlines >= 3 or (emotion.failed_limit_up_count > max(emotion.limit_up_count * 0.25, 3) and emotion.temperature >= 45):
         stage = "分歧期"
-        reason = "多条主线并行争夺资金，热点切换速度加快。"
+        reason = "多条主线并行或炸板增加，资金分歧加大。"
     elif index_5d > 1 and leader_strength >= 65:
         stage = "发酵期"
         reason = "指数和主线同步走强，赚钱效应扩散。"
-    elif leader_strength >= 50 and emotion.temperature >= 45:
+    elif leader_strength >= 50 and emotion.temperature >= 50:
         stage = "启动期"
         reason = "主线开始出现强度，但赚钱效应尚未全面扩散。"
+    elif emotion.temperature >= 55 and leader_strength < 50:
+        stage = "活跃期"
+        reason = "市场赚钱效应尚可，但缺少可确认主线。"
     else:
         stage = "退潮期"
         reason = "主线强度和市场温度同步回落。"
@@ -1052,8 +1069,11 @@ def _rotation_reasons(
     directions: list[CapitalDirection],
     weak_directions: list[CapitalDirection],
     group_stats: dict[str, StyleGroupStats],
+    mainlines: list[MainlineStats],
 ) -> list[str]:
     reasons = []
+    if not mainlines:
+        return ["主线数据未接入：上涨家数、成交额和Top20数量不足，暂不解释题材轮动。"]
     if directions and directions[0].strength >= 75:
         reasons.append(f"{directions[0].name}资金强度达到{directions[0].strength:.1f}，成为短线资金集中方向。")
     if (
@@ -1190,6 +1210,24 @@ def _persistence_reason(strength: float, flow: float, top20_count: int) -> str:
     if top20_count:
         reasons.append(f"Top20占{top20_count}只")
     return "；".join(reasons) if reasons else "强度和资金持续性不足"
+
+
+def _has_mainline_evidence(item: MainlineStats) -> bool:
+    return item.up_count > 0 or item.amount > 0 or item.top20_count > 0
+
+
+def _eligible_market_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    filtered = frame.copy()
+    codes = filtered.get("代码", pd.Series("", index=filtered.index)).astype(str).str.extract(r"(\d{6})", expand=False).fillna("").str.zfill(6)
+    names = filtered.get("名称", pd.Series("", index=filtered.index)).astype(str).str.upper()
+    is_st_column = pd.to_numeric(filtered.get("is_st", pd.Series(0, index=filtered.index)), errors="coerce").fillna(0.0)
+    tradable = ~codes.str.startswith(("4", "8", "920"))
+    tradable &= ~names.str.contains("ST", na=False)
+    tradable &= ~names.str.contains("退", na=False)
+    tradable &= is_st_column != 1
+    return filtered[tradable].copy()
 
 
 def _column_sum(frame: pd.DataFrame, names: tuple[str, ...]) -> float:

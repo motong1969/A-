@@ -334,19 +334,24 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
             "风格状态：数据不足",
             "今日建议：建议只观察",
         ]
-    capital_lines = [
-        f"- {item.stars} {item.name}（强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
-        for item in style.capital_directions
-        if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
-    ] or ["- 暂无明确资金方向"]
-    capital_lines = capital_lines[:6]
-    weak_lines = [
-        f"- {item.stars} {item.name}（弱势强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
-        for item in style.weak_directions
-        if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
-    ] or ["- 暂无明确弱势方向"]
-    weak_lines = weak_lines[:5]
     decision_lines = _trading_decision_lines(style)
+    decision = getattr(style, "trading_decision", None)
+    if decision is not None and not decision.mainlines:
+        capital_lines = ["- 主线数据未接入，暂不输出资金主线。"]
+        weak_lines = ["- 主线数据未接入，暂不输出弱势主线。"]
+    else:
+        capital_lines = [
+            f"- {item.stars} {item.name}（强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
+            for item in style.capital_directions
+            if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
+        ] or ["- 暂无明确资金方向"]
+        capital_lines = capital_lines[:6]
+        weak_lines = [
+            f"- {item.stars} {item.name}（弱势强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
+            for item in style.weak_directions
+            if item.name not in {"科技成长股", "创业板/科创板股票", "传统低位权重股", "高位强势股", "低位补涨股"}
+        ] or ["- 暂无明确弱势方向"]
+        weak_lines = weak_lines[:5]
     lines = [
         style.style_sentence,
         "",
@@ -393,6 +398,8 @@ def _mainline_explanation(style) -> str:
     if decision is not None and decision.mainlines:
         names = "、".join(item.name for item in decision.mainlines[:3])
         return f"资金主要集中在{names}，当前节奏为{decision.rhythm.stage}，建议仓位{decision.position_advice.percent}%。"
+    if decision is not None:
+        return "主线数据未接入：上涨家数、成交额和Top20数量没有形成可验证主线。"
     return style.explanation
 
 
@@ -402,7 +409,7 @@ def _display_market_style(style) -> str:
         leader = decision.mainlines[0].name
         return f"{leader}主线 / {decision.rhythm.stage}"
     if decision is not None:
-        return f"无明确主线 / {decision.rhythm.stage}"
+        return f"主线数据未接入 / {decision.rhythm.stage}"
     return style.today_style
 
 
@@ -415,16 +422,25 @@ def _trading_decision_lines(style) -> list[str]:
         "",
         "### 市场主线分析",
         "",
-        "| 排名 | 主线 | 星级 | 上涨家数 | 平均涨幅 | 涨停数 | 成交金额 | 主力净流入 | Top20数量 | 强度评分 |",
-        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for item in decision.mainlines[:8]:
-        lines.append(
-            f"| {item.rank} | {item.name} | {item.stars} | {item.up_count} | {item.average_pct:.2f}% | "
-            f"{item.limit_up_count} | {item.amount / 100_000_000:.1f}亿 | {item.main_net_inflow / 100_000_000:.1f}亿 | "
-            f"{item.top20_count} | {item.strength:.1f} |"
+    if not decision.mainlines:
+        lines.extend(["主线数据未接入：上涨家数、成交额、Top20数量均不足，禁止输出主线结论。", ""])
+    else:
+        lines.extend(
+            [
+                "| 排名 | 主线 | 星级 | 上涨家数 | 平均涨幅 | 涨停数 | 成交金额 | 主力净流入 | Top20数量 | 强度评分 |",
+                "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
         )
+        for item in decision.mainlines[:8]:
+            lines.append(
+                f"| {item.rank} | {item.name} | {item.stars} | {item.up_count} | {item.average_pct:.2f}% | "
+                f"{item.limit_up_count} | {item.amount / 100_000_000:.1f}亿 | {item.main_net_inflow / 100_000_000:.1f}亿 | "
+                f"{item.top20_count} | {item.strength:.1f} |"
+            )
     lines.extend(["", "### 每条主线龙头", ""])
+    if not decision.mainlines:
+        lines.append("主线数据未接入，今日不输出龙头。")
     for item in decision.mainlines[:3]:
         lines.append(f"#### {item.stars} 第{item.rank}主线：{item.name}")
         if not item.leaders:
@@ -505,8 +521,11 @@ def _trading_decision_lines(style) -> list[str]:
     )
     lines.extend(f"- {name}：{score:.0f}/100" for name, score in risk.source_scores.items())
     lines.extend(["", "### 主线持续性评分", ""])
-    for item in decision.mainlines[:5]:
-        lines.append(f"- {item.name}：还能持续 {item.persistence_stars}，{item.persistence_reason}")
+    if not decision.mainlines:
+        lines.append("- 主线数据未接入，无法评估持续性。")
+    else:
+        for item in decision.mainlines[:5]:
+            lines.append(f"- {item.name}：还能持续 {item.persistence_stars}，{item.persistence_reason}")
     lines.extend(
         [
             "",
