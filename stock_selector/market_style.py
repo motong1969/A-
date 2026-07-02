@@ -435,19 +435,40 @@ def attach_top20_to_market_style(
         return snapshot
     mainlines = _attach_top20_to_mainlines(snapshot.trading_decision.mainlines, top20)
     decision = snapshot.trading_decision
+    rhythm = decision.rhythm
+    position = decision.position_advice
+    risk = decision.risk
+    trade_modes = decision.trade_mode_scores
+    forbidden = decision.forbidden_actions
+    rotation_reasons = decision.rotation_reasons
+    trade_value_stars = decision.trade_value_stars
+    trade_value_reason = decision.trade_value_reason
+    if mainlines and any("主线数据未接入" in reason for reason in decision.rotation_reasons):
+        rhythm = _market_rhythm(decision.emotion, mainlines, snapshot.index_returns, snapshot.rotation_fast)
+        position = _position_advice(decision.emotion, rhythm, mainlines, snapshot.rotation_fast)
+        risk = _risk_assessment(decision.emotion, rhythm, snapshot.index_returns, mainlines)
+        trade_modes = _trade_mode_scores(decision.emotion, rhythm, position, snapshot.rotation_fast)
+        forbidden = _forbidden_actions(decision.emotion, rhythm, mainlines, risk, snapshot.high_low_state)
+        rotation_reasons = [
+            f"{mainlines[0].name}由Top20候选和成交额反向确认，主线数据已接入。",
+            f"第一主线Top20数量为{mainlines[0].top20_count}，成交额{mainlines[0].amount / 100_000_000:.1f}亿元。",
+        ]
+        trade_value_score = max(0.0, min(100.0, decision.emotion.temperature * 0.35 + position.percent * 0.35 + mainlines[0].strength * 0.3))
+        trade_value_stars = _stars(trade_value_score)
+        trade_value_reason = _trade_value_reason(decision.emotion, rhythm, mainlines, risk)
     updated = TradingDecisionSnapshot(
         mainlines=mainlines,
         emotion=decision.emotion,
-        rhythm=decision.rhythm,
-        rotation_reasons=decision.rotation_reasons,
+        rhythm=rhythm,
+        rotation_reasons=rotation_reasons,
         prediction_detail=decision.prediction_detail,
-        position_advice=decision.position_advice,
-        trade_mode_scores=decision.trade_mode_scores,
-        forbidden_actions=decision.forbidden_actions,
-        one_sentence=_one_sentence(decision.rhythm.stage, mainlines, decision.emotion, decision.position_advice),
-        risk=decision.risk,
-        trade_value_stars=decision.trade_value_stars,
-        trade_value_reason=decision.trade_value_reason,
+        position_advice=position,
+        trade_mode_scores=trade_modes,
+        forbidden_actions=forbidden,
+        one_sentence=_one_sentence(rhythm.stage, mainlines, decision.emotion, position),
+        risk=risk,
+        trade_value_stars=trade_value_stars,
+        trade_value_reason=trade_value_reason,
         validation=decision.validation,
     )
     return MarketStyleSnapshot(**{**snapshot.__dict__, "trading_decision": updated})

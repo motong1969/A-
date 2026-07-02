@@ -360,8 +360,6 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
         f"连续持续：{style.duration_days}天",
         f"风格状态：{style.style_state}",
         f"高低切状态：{style.high_low_state}",
-        f"最近5日主导风格：{style.dominant_5d}",
-        f"最近20日主导风格：{style.dominant_20d}",
         f"当前领涨指数：{style.leading_index}",
         "",
         "资金主要流向：",
