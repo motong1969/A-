@@ -334,8 +334,6 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
             "风格状态：数据不足",
             "今日建议：建议只观察",
         ]
-    prediction = style.prediction
-    probabilities = prediction.probabilities if prediction else {}
     capital_lines = [
         f"- {item.stars} {item.name}（强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
         for item in style.capital_directions[:6]
@@ -344,12 +342,11 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
         f"- {item.stars} {item.name}（弱势强度{item.strength:.1f}，涨跌幅{item.pct_change:.2f}%）"
         for item in style.weak_directions[:5]
     ] or ["- 暂无明确弱势方向"]
-    consecutive = style.consecutive_counts
+    decision_lines = _trading_decision_lines(style)
     lines = [
         style.style_sentence,
         "",
-        f"市场风格：{style.today_style}",
-        f"副风格：{style.secondary_style}",
+        f"市场风格：{_display_market_style(style)}",
         f"风格置信度：{style.confidence:.0f}%",
         f"连续持续：{style.duration_days}天",
         f"风格状态：{style.style_state}",
@@ -358,30 +355,11 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
         f"最近20日主导风格：{style.dominant_20d}",
         f"当前领涨指数：{style.leading_index}",
         "",
-        "风格置信度拆分：",
-        f"- 科技成长：{style.style_scores.get('科技成长', 0.0):.0f}%",
-        f"- 传统低位：{style.style_scores.get('传统低位', 0.0):.0f}%",
-        f"- 快速轮动：{style.style_scores.get('快速轮动', 0.0):.0f}%",
-        f"- 其它：{style.style_scores.get('其它', 0.0):.0f}%",
-        "",
-        "连续统计：",
-        f"- 科技成长：连续{consecutive.get('科技成长', 0)}天",
-        f"- 传统低位：连续{consecutive.get('传统低位', 0)}天",
-        f"- 轮动：连续{consecutive.get('快速轮动', 0)}天",
-        f"- 震荡：连续{consecutive.get('震荡', 0)}天",
-        "",
         "资金主要流向：",
         *capital_lines,
         "",
         "弱势方向：",
         *weak_lines,
-        "",
-        "明日预测：",
-        f"- 科技继续：{probabilities.get('科技继续', 0.0):.0f}%",
-        f"- 高低切：{probabilities.get('高低切', 0.0):.0f}%",
-        f"- 传统低位：{probabilities.get('传统低位', 0.0):.0f}%",
-        f"- 其它：{probabilities.get('其它', 0.0):.0f}%",
-        f"- 预测依据：{prediction.basis if prediction else '暂无'}",
         "",
         "今日建议：",
         *(f"- {item}" for item in style.recommendations),
@@ -391,26 +369,153 @@ def _market_style_lines(result: AkShareSelectionResult) -> list[str]:
         f"- 最近30天预测正确率：{style.rolling_accuracy_30d:.0f}%",
         "",
         "说明：",
-        style.explanation,
+        _mainline_explanation(style),
         "",
         f"- 是否发生高低切：{'是' if style.high_low_switch else '否'}",
-        f"- 科技股是否退潮：{'是' if style.tech_retreat else '否'}",
         f"- 创业板/科创板是否重新走强：{'是' if style.growth_board_recovering else '否'}",
-        f"- 传统低位股是否只是短线补涨：{'是' if style.traditional_short_rebound else '否'}",
         f"- 当前操作建议：{style.action_advice}",
         "",
-        "| 风格组 | 上涨 | 下跌 | 涨停 | 跌停 | 平均涨跌幅 | 成交额占比 | 资金强度 | 5日趋势 | 10日趋势 | 20日趋势 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        *decision_lines,
+        "",
     ]
-    for stats in style.group_stats.values():
-        lines.append(
-            f"| {stats.name} | {stats.up_count} | {stats.down_count} | {stats.limit_up_count} | "
-            f"{stats.limit_down_count} | {stats.average_pct:.2f}% | {stats.amount_share:.2f}% | "
-            f"{stats.fund_strength:.2f} | {stats.trend_5d:.2f}% | {stats.trend_10d:.2f}% | {stats.trend_20d:.2f}% |"
-        )
-    lines.extend(["", "| 周期 | 强弱排序 |", "| --- | --- |"])
+    lines.extend(["| 周期 | 强弱排序 |", "| --- | --- |"])
     for window, ranking in style.index_rankings.items():
         lines.append(f"| {window} | {' > '.join(ranking)} |")
+    return lines
+
+
+def _mainline_explanation(style) -> str:
+    decision = getattr(style, "trading_decision", None)
+    if decision is not None and decision.mainlines:
+        names = "、".join(item.name for item in decision.mainlines[:3])
+        return f"资金主要集中在{names}，当前节奏为{decision.rhythm.stage}，建议仓位{decision.position_advice.percent}%。"
+    return style.explanation
+
+
+def _display_market_style(style) -> str:
+    decision = getattr(style, "trading_decision", None)
+    if decision is not None and decision.mainlines:
+        leader = decision.mainlines[0].name
+        return f"{leader}主线 / {decision.rhythm.stage}"
+    return style.today_style
+
+
+def _trading_decision_lines(style) -> list[str]:
+    decision = getattr(style, "trading_decision", None)
+    if decision is None:
+        return ["## A股每日交易决策", "", "交易决策数据不足。"]
+    lines = [
+        "## A股每日交易决策",
+        "",
+        "### 市场主线分析",
+        "",
+        "| 排名 | 主线 | 星级 | 上涨家数 | 平均涨幅 | 涨停数 | 成交金额 | 主力净流入 | Top20数量 | 强度评分 |",
+        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for item in decision.mainlines[:8]:
+        lines.append(
+            f"| {item.rank} | {item.name} | {item.stars} | {item.up_count} | {item.average_pct:.2f}% | "
+            f"{item.limit_up_count} | {item.amount / 100_000_000:.1f}亿 | {item.main_net_inflow / 100_000_000:.1f}亿 | "
+            f"{item.top20_count} | {item.strength:.1f} |"
+        )
+    lines.extend(["", "### 每条主线龙头", ""])
+    for item in decision.mainlines[:3]:
+        lines.append(f"#### {item.stars} 第{item.rank}主线：{item.name}")
+        if not item.leaders:
+            lines.append("- 暂无可确认龙头。")
+        for idx, leader in enumerate(item.leaders[:3], start=1):
+            lines.append(f"- 龙{idx}：{leader['name']}（{leader['code']}）")
+            lines.append(f"  - 说明：{leader['reason']}")
+        lines.append(f"- 主线持续性：{item.persistence_stars}，{item.persistence_reason}")
+        lines.append("")
+    emotion = decision.emotion
+    lines.extend(
+        [
+            "### 市场情绪分析",
+            "",
+            f"- 市场温度：{emotion.temperature:.0f}/100",
+            f"- 赚钱效应：{emotion.profit_effect_stars}",
+            f"- 亏钱效应：{emotion.loss_effect_stars}",
+            f"- 涨停溢价：最近5日平均 {emotion.limit_up_premium_5d:.2f}%",
+            f"- 炸板率：今日炸板数量 {emotion.failed_limit_up_count}",
+            f"- 连板高度：最高{emotion.max_board_height}板",
+            f"- 最高连板股票：{emotion.max_board_stock}",
+            f"- 跌停数量：{emotion.limit_down_count}",
+            f"- 涨停数量：{emotion.limit_up_count}",
+            f"- 涨停晋级率：{emotion.promotion_rate:.1f}%",
+            f"- 首板/二板/三板/四板以上：{emotion.first_board_count}/{emotion.second_board_count}/{emotion.third_board_count}/{emotion.fourth_plus_count}",
+            f"- 接力情绪评分：{emotion.relay_score:.0f}/100",
+            "",
+            "### 市场节奏分析",
+            "",
+            f"- 当前：{decision.rhythm.stars} {decision.rhythm.stage}",
+            f"- 可信度：{decision.rhythm.confidence:.0f}%",
+            f"- 理由：{decision.rhythm.reason}",
+            "",
+            "### 风格轮动原因",
+            "",
+        ]
+    )
+    lines.extend(f"- {reason}" for reason in decision.rotation_reasons)
+    prediction = decision.prediction_detail
+    lines.extend(
+        [
+            "",
+            "### 风格预测升级",
+            "",
+            f"- 预测：{prediction.prediction}",
+            f"- 概率：{prediction.probability:.0f}%",
+            f"- 历史出现：{prediction.historical_count}次",
+            f"- 成功：{prediction.success_count}次",
+            f"- 历史成功率：{prediction.success_rate:.1f}%",
+            f"- 最近相似行情：{'、'.join(prediction.similar_cases)}",
+            "",
+            "### 仓位建议",
+            "",
+            f"- 建议仓位：{decision.position_advice.percent}%",
+            f"- 推荐值：{decision.position_advice.stars}",
+            f"- 原因：{decision.position_advice.reason}",
+            "",
+            "### 交易策略",
+            "",
+        ]
+    )
+    lines.extend(f"- {name}：{stars}" for name, stars in decision.trade_mode_scores.items())
+    lines.extend(["", "### 交易禁区", ""])
+    lines.extend(f"- {action}" for action in decision.forbidden_actions)
+    risk = decision.risk
+    lines.extend(
+        [
+            "",
+            "### 市场一句话总结",
+            "",
+            decision.one_sentence,
+            "",
+            "### 市场风险等级",
+            "",
+            f"- 市场风险：{risk.stars}",
+            f"- 综合风险评分：{risk.total_score:.0f}/100",
+        ]
+    )
+    lines.extend(f"- {name}：{score:.0f}/100" for name, score in risk.source_scores.items())
+    lines.extend(["", "### 主线持续性评分", ""])
+    for item in decision.mainlines[:5]:
+        lines.append(f"- {item.name}：还能持续 {item.persistence_stars}，{item.persistence_reason}")
+    lines.extend(
+        [
+            "",
+            "### 历史验证",
+            "",
+            f"- 最近30天准确率：{decision.validation.get('最近30天', 0.0):.1f}%",
+            f"- 最近60天准确率：{decision.validation.get('最近60天', 0.0):.1f}%",
+            f"- 最近90天准确率：{decision.validation.get('最近90天', 0.0):.1f}%",
+            "",
+            "### 交易价值评分",
+            "",
+            f"- 今日是否值得交易：{decision.trade_value_stars}",
+            f"- 原因：{decision.trade_value_reason}",
+        ]
+    )
     return lines
 
 

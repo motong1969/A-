@@ -63,7 +63,10 @@ def test_market_style_history_records_prediction_and_validation(tmp_path) -> Non
         sector_rankings=sectors,
         history_path=history_path,
     )
-    assert first.capital_directions[0].name in {"AI", "PCB"}
+    assert first.capital_directions[0].name in {"AI应用", "AI服务器", "PCB"}
+    assert first.trading_decision is not None
+    assert first.trading_decision.mainlines
+    assert first.trading_decision.emotion.temperature >= 0
     update_market_style_history(first, history_path=history_path)
 
     second = analyze_market_style(
@@ -80,13 +83,20 @@ def test_market_style_history_records_prediction_and_validation(tmp_path) -> Non
     assert history.iloc[-1]["持续天数"] >= 1
     assert str(history.iloc[0]["次日验证结果"]).startswith("今日风格=")
     assert history.iloc[-1]["预测风格"] in {"科技继续", "高低切", "传统低位", "其它"}
+    assert "第一主线" in history.columns
+    assert "市场温度" in history.columns
 
 
 def test_market_style_report_and_score_adjustment_are_rendered() -> None:
     result = AkShareV1Engine(fetcher=MarketStyleFetcher()).run(date(2026, 7, 2))
     report = render_today_stock(result)
     assert "## 市场风格分析" in report
-    assert "明日预测：" in report
     assert "资金主要流向：" in report
+    assert "## A股每日交易决策" in report
+    assert "### 市场主线分析" in report
+    assert "### 市场情绪分析" in report
+    assert "### 仓位建议" in report
+    assert "### 交易禁区" in report
+    assert "### 风格预测升级" in report
     assert "当前市场不是单边主线" in report
     assert any("市场风格调整" in item.score_breakdown for item in result.top20)

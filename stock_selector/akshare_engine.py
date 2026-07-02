@@ -7,7 +7,13 @@ import pandas as pd
 
 from stock_selector.config import MainBoardStrategySettings
 from stock_selector.data.akshare import AkShareDataFetcher
-from stock_selector.market_style import MarketStyleSnapshot, analyze_market_style, classify_stock, market_style_score_adjustment
+from stock_selector.market_style import (
+    MarketStyleSnapshot,
+    analyze_market_style,
+    attach_top20_to_market_style,
+    classify_stock,
+    market_style_score_adjustment,
+)
 
 
 def _number(value, default: float = 0.0) -> float:
@@ -380,6 +386,7 @@ class AkShareV1Engine:
             self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True)),
             market_style,
         )
+        market_style = attach_top20_to_market_style(market_style, ranked[:20])
         elimination_stats["final_count"] = len(ranked)
         if hasattr(self.fetcher, "history_source_name"):
             elimination_stats["history_source"] = getattr(self.fetcher, "history_source_name", "") or "未知"
