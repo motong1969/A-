@@ -374,7 +374,8 @@ class AkShareV1Engine:
             candidate = self._candidate(row, features, sector, funds.get(code, {}), market)
             if candidate is not None:
                 candidates.append(candidate)
-        market_style = self._market_style(trade_date, spot, feature_rows)
+        sector_rankings = sorted(sectors.values(), key=lambda item: item.rank or 999_999)
+        market_style = self._market_style(trade_date, spot, feature_rows, sector_rankings)
         ranked = self._apply_market_style_adjustment(
             self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True)),
             market_style,
@@ -384,7 +385,6 @@ class AkShareV1Engine:
             elimination_stats["history_source"] = getattr(self.fetcher, "history_source_name", "") or "未知"
         if hasattr(self.fetcher, "history_stats"):
             elimination_stats.update(getattr(self.fetcher, "history_stats", {}))
-        sector_rankings = sorted(sectors.values(), key=lambda item: item.rank or 999_999)
         return AkShareSelectionResult(
             trade_date,
             market,
@@ -428,14 +428,20 @@ class AkShareV1Engine:
     ) -> list[AkShareCandidate]:
         adjusted = []
         for item in ranked:
-            delta, reason = market_style_score_adjustment(
+            delta, reason, score_cap = market_style_score_adjustment(
                 market_style,
                 code=item.code,
                 sector=item.sector,
                 score=item.score,
             )
-            if not delta:
-                adjusted.append(item)
+            capped_score = min(item.score, score_cap) if score_cap is not None else item.score
+            if not delta and capped_score == item.score:
+                if market_style is None:
+                    adjusted.append(item)
+                else:
+                    breakdown = dict(item.score_breakdown)
+                    breakdown["市场风格调整"] = 0.0
+                    adjusted.append(replace(item, score_breakdown=breakdown))
                 continue
             breakdown = dict(item.score_breakdown)
             breakdown["市场风格调整"] = round(delta, 1)
@@ -446,6 +452,9 @@ class AkShareV1Engine:
             else:
                 reasons.append(reason)
             new_score = round(max(0.0, min(100.0, item.score + delta)), 1)
+            if score_cap is not None and new_score > score_cap:
+                new_score = float(score_cap)
+                risks.append(f"快速轮动，最高评分限制{score_cap:.0f}分")
             adjusted.append(
                 replace(
                     item,
@@ -458,7 +467,13 @@ class AkShareV1Engine:
             )
         return sorted(adjusted, key=lambda item: item.score, reverse=True)
 
-    def _market_style(self, trade_date: date, spot: pd.DataFrame, feature_rows: list[dict]) -> MarketStyleSnapshot | None:
+    def _market_style(
+        self,
+        trade_date: date,
+        spot: pd.DataFrame,
+        feature_rows: list[dict],
+        sector_rankings: list[SectorSnapshot],
+    ) -> MarketStyleSnapshot | None:
         try:
             market_spot = self.fetcher.full_market_spot() if hasattr(self.fetcher, "full_market_spot") else spot
         except Exception:
@@ -469,6 +484,7 @@ class AkShareV1Engine:
                 fetcher=self.fetcher,
                 market_spot=market_spot,
                 feature_rows=feature_rows,
+                sector_rankings=sector_rankings,
             )
         except Exception:
             return None
