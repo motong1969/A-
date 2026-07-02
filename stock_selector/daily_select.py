@@ -397,6 +397,8 @@ def _display_market_style(style) -> str:
     if decision is not None and decision.mainlines:
         leader = decision.mainlines[0].name
         return f"{leader}主线 / {decision.rhythm.stage}"
+    if decision is not None:
+        return f"无明确主线 / {decision.rhythm.stage}"
     return style.today_style
 
 

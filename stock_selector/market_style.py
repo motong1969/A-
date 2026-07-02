@@ -127,6 +127,14 @@ TOPIC_KEYWORDS = {
     "中字头": ("中字头", "央企"),
 }
 
+INTERNAL_STYLE_GROUPS = {
+    "科技成长股",
+    "创业板/科创板股票",
+    "传统低位权重股",
+    "高位强势股",
+    "低位补涨股",
+}
+
 
 @dataclass(frozen=True)
 class StyleGroupStats:
@@ -835,6 +843,8 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
     top20_list = list(top20)
     for direction in directions:
         topic = _topic_label(direction.name)
+        if topic in INTERNAL_STYLE_GROUPS:
+            continue
         mask = frame["所属板块"].astype(str).map(lambda value: _topic_label(value) == topic or topic in value)
         subset = frame[mask].copy()
         pct = pd.to_numeric(subset.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
@@ -901,7 +911,31 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
                 persistence_reason=_persistence_reason(strength, item.main_net_inflow, top20_count),
             )
         )
-    return sorted(updated, key=lambda value: value.strength, reverse=True)
+    existing = {item.name for item in updated}
+    grouped: dict[str, list[object]] = {}
+    for item in top20_list:
+        topic = _topic_label(str(getattr(item, "sector", "")))
+        if not topic or topic == "未映射" or topic in INTERNAL_STYLE_GROUPS or topic in existing:
+            continue
+        grouped.setdefault(topic, []).append(item)
+    for topic, stocks in grouped.items():
+        amount = sum(float(getattr(stock, "amount", 0.0) or 0.0) for stock in stocks)
+        strength = max(0.0, min(100.0, 45 + len(stocks) * 8 + min(amount / 1_000_000_000, 25)))
+        updated.append(
+            MainlineStats(
+                name=topic,
+                rank=len(updated) + 1,
+                stars=_stars(strength),
+                amount=amount,
+                top20_count=len(stocks),
+                strength=strength,
+                leaders=_mainline_leaders_from_candidates(stocks),
+                persistence_stars=_stars(strength * 0.7),
+                persistence_reason=_persistence_reason(strength, 0.0, len(stocks)),
+            )
+        )
+    ranked = sorted(updated, key=lambda value: value.strength, reverse=True)
+    return [MainlineStats(**{**item.__dict__, "rank": index}) for index, item in enumerate(ranked, start=1)]
 
 
 def _mainline_leaders(topic: str, subset: pd.DataFrame, candidates: list[object]) -> list[dict]:
