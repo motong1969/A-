@@ -121,6 +121,38 @@ def test_weak_market_warns_but_still_outputs_rankings() -> None:
     assert result.top20
 
 
+class DailyDeclineFetcher(MockAkShareDataFetcher):
+    declined_code = ALLOWED_CODES[0]
+
+    def market_spot(self):
+        frame = super().market_spot()
+        frame.loc[frame["代码"] == self.declined_code, "涨跌幅"] = -6.0
+        return frame
+
+    def stock_history(self, symbol: str, end_date: date, days: int = 160):
+        frame = super().stock_history(symbol, end_date, days)
+        if symbol != self.declined_code:
+            return frame
+        closes = [10.0 + offset * 0.02 for offset in range(len(frame) - 20)]
+        closes.extend([15.0 + offset * 0.15 for offset in range(19)])
+        closes.append(closes[-1] * 0.94)
+        frame["close"] = closes
+        frame["open"] = frame["close"] * 1.01
+        frame["high"] = frame["open"] * 1.01
+        frame["low"] = frame["close"] * 0.99
+        frame["vol"] = 3_500_000.0
+        frame["amount"] = frame["close"] * frame["vol"] * 12
+        return frame
+
+
+def test_daily_decline_over_5_percent_only_enters_high_risk_pool() -> None:
+    result = AkShareV1Engine(fetcher=DailyDeclineFetcher()).run(date(2026, 6, 2))
+    code = DailyDeclineFetcher.declined_code
+    assert any(item.code == code and item.daily_pct <= -5.0 for item in result.high_risk_pool)
+    assert all(item.code != code for item in result.top3)
+    assert all(item.code != code for item in result.top20)
+
+
 class LowLiquidityFetcher(MockAkShareDataFetcher):
     def market_spot(self):
         frame = super().market_spot()

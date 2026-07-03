@@ -154,3 +154,28 @@ def test_market_emotion_excludes_st_delisting_and_bse(tmp_path) -> None:
     assert emotion.limit_down_count == 0
     assert snapshot.trading_decision.mainlines[0].up_count == 1
     assert snapshot.trading_decision.mainlines[0].amount == 200_000_000
+
+
+def test_mainline_core_decline_forces_divergence_status(tmp_path) -> None:
+    history_path = tmp_path / "market_style_history.csv"
+    fetcher = MarketStyleFetcher()
+    spot = pd.DataFrame(
+        [
+            {"代码": "600001", "名称": "PCB核心1", "所属板块": "PCB", "涨跌幅": -6.0, "成交额": 500_000_000, "涨停标记": 0, "跌停标记": 0},
+            {"代码": "600002", "名称": "PCB核心2", "所属板块": "PCB", "涨跌幅": -5.5, "成交额": 450_000_000, "涨停标记": 0, "跌停标记": 0},
+            {"代码": "600003", "名称": "PCB核心3", "所属板块": "PCB", "涨跌幅": -4.0, "成交额": 400_000_000, "涨停标记": 0, "跌停标记": 0},
+            {"代码": "600004", "名称": "PCB核心4", "所属板块": "PCB", "涨跌幅": 1.0, "成交额": 350_000_000, "涨停标记": 0, "跌停标记": 0},
+        ]
+    )
+    snapshot = analyze_market_style(
+        trade_date=date(2026, 7, 2),
+        fetcher=fetcher,
+        market_spot=spot,
+        feature_rows=[],
+        sector_rankings=[SectorRow("PCB", "概念", 1, 95, 5.2, 1_200_000_000, 9.0)],
+        history_path=history_path,
+    )
+    assert snapshot.trading_decision is not None
+    mainline = snapshot.trading_decision.mainlines[0]
+    assert mainline.status == "分歧/退潮风险"
+    assert mainline.stars != "★★★★★"

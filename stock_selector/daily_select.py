@@ -58,6 +58,8 @@ def _candidate_rows(result: AkShareSelectionResult, items) -> list[dict]:
             "amount": item.amount,
             "breakout_margin": round(item.breakout_margin, 4),
             "sector_pct_change": item.sector_pct_change,
+            "daily_pct": item.daily_pct,
+            "near_limit_down": item.near_limit_down,
             "sector_main_net_inflow": item.sector_main_net_inflow,
             "main_net_inflow": item.main_net_inflow,
             "main_net_inflow_5d": item.main_net_inflow_5d,
@@ -222,6 +224,10 @@ def render_today_stock(
             lines.extend(_candidate_summary_lines(index, item, result.market.status))
     lines.extend(
         [
+            "## 高位风险观察池",
+            "",
+            *_high_risk_watch_pool_lines(result),
+            "",
             "## ③ 今天为什么没有（如果没有）",
             "",
             _no_pick_reason(result, has_high_confidence),
@@ -426,13 +432,13 @@ def _trading_decision_lines(style) -> list[str]:
     else:
         lines.extend(
             [
-                "| 排名 | 主线 | 星级 | 上涨家数 | 平均涨幅 | 涨停数 | 成交金额 | 主力净流入 | Top20数量 | 强度评分 |",
-                "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| 排名 | 主线 | 状态 | 星级 | 上涨家数 | 平均涨幅 | 涨停数 | 成交金额 | 主力净流入 | Top20数量 | 强度评分 |",
+                "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for item in decision.mainlines[:8]:
             lines.append(
-                f"| {item.rank} | {item.name} | {item.stars} | {item.up_count} | {item.average_pct:.2f}% | "
+                f"| {item.rank} | {item.name} | {getattr(item, 'status', '正常')} | {item.stars} | {item.up_count} | {item.average_pct:.2f}% | "
                 f"{item.limit_up_count} | {item.amount / 100_000_000:.1f}亿 | {item.main_net_inflow / 100_000_000:.1f}亿 | "
                 f"{item.top20_count} | {item.strength:.1f} |"
             )
@@ -440,7 +446,7 @@ def _trading_decision_lines(style) -> list[str]:
     if not decision.mainlines:
         lines.append("主线数据未接入，今日不输出龙头。")
     for item in decision.mainlines[:3]:
-        lines.append(f"#### {item.stars} 第{item.rank}主线：{item.name}")
+        lines.append(f"#### {item.stars} 第{item.rank}主线：{item.name}（{getattr(item, 'status', '正常')}）")
         if not item.leaders:
             lines.append("- 暂无可确认龙头。")
         for idx, leader in enumerate(item.leaders[:3], start=1):
@@ -547,12 +553,31 @@ def _candidate_summary_lines(index: int, item, market_status: str) -> list[str]:
         f"### {index}. {item.name} ({item.code})",
         f"- 所属板块：{item.sector}",
         f"- 最终评分：{item.score:.2f}",
+        f"- 当日涨跌幅：{item.daily_pct:.2f}%",
         f"- 推荐理由：{'；'.join(item.reasons)}",
         f"- 买入区间：{item.buy_range}",
         f"- 止损位：{item.stop_loss:.2f}",
         f"- 风险等级：{_risk_level_for_candidate(item, market_status)}",
         "",
     ]
+
+
+def _high_risk_watch_pool_lines(result: AkShareSelectionResult) -> list[str]:
+    items = result.high_risk_pool
+    if not items:
+        return ["暂无。"]
+    lines = [
+        "以下股票因当日跌幅 <= -5% 或接近跌停，只能进入高位风险观察池，禁止进入今日前三和今日首选。",
+        "",
+        "| 排名 | 代码 | 名称 | 板块 | 当日涨跌幅 | 总评分 | 风险原因 |",
+        "| ---: | --- | --- | --- | ---: | ---: | --- |",
+    ]
+    for index, item in enumerate(items[:20], start=1):
+        reason = "接近跌停" if item.near_limit_down else "当日跌幅<=-5%"
+        lines.append(
+            f"| {index} | {item.code} | {item.name} | {item.sector} | {item.daily_pct:.2f}% | {item.score:.2f} | {reason} |"
+        )
+    return lines
 
 
 def _first_pick_lines(result: AkShareSelectionResult, repeat_watch_pool: list[dict]) -> list[str]:
@@ -704,13 +729,13 @@ def _sector_leaderboard_lines(result: AkShareSelectionResult) -> list[str]:
 
 
 def _top20_lines(result: AkShareSelectionResult) -> list[str]:
-    lines = ["| 排名 | 代码 | 名称 | 板块 | 总评分 | 收盘价 | 换手率 | 成交额(亿) | 操作建议 |", "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | --- |"]
+    lines = ["| 排名 | 代码 | 名称 | 板块 | 当日涨跌幅 | 总评分 | 收盘价 | 换手率 | 成交额(亿) | 操作建议 |", "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |"]
     if not result.top20:
-        lines.append("| - | 暂无 | 暂无 | - | - | - | - | - | 暂不操作 |")
+        lines.append("| - | 暂无 | 暂无 | - | - | - | - | - | - | 暂不操作 |")
         return lines
     for index, item in enumerate(result.top20, start=1):
         lines.append(
-            f"| {index} | {item.code} | {item.name} | {item.sector} | {item.score:.2f} | {item.close:.2f} | {item.turnover_rate:.2f}% | {item.amount / 100_000_000:.2f} | {item.action} |"
+            f"| {index} | {item.code} | {item.name} | {item.sector} | {item.daily_pct:.2f}% | {item.score:.2f} | {item.close:.2f} | {item.turnover_rate:.2f}% | {item.amount / 100_000_000:.2f} | {item.action} |"
         )
     return lines
 

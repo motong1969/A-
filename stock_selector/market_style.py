@@ -186,6 +186,9 @@ class MainlineStats:
     leaders: list[dict] = field(default_factory=list)
     persistence_stars: str = "★☆☆☆☆"
     persistence_reason: str = "持续性数据不足"
+    status: str = "正常"
+    core_count: int = 0
+    core_decline_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -621,7 +624,10 @@ def _normalize_spot(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("代码", "名称", "所属板块"):
         if column not in normalized:
             normalized[column] = ""
-    for column in ("涨跌幅", "成交额", "流通市值", "涨停标记", "跌停标记"):
+    if "涨跌幅" not in normalized:
+        normalized["涨跌幅"] = pd.NA
+    normalized["涨跌幅"] = pd.to_numeric(normalized["涨跌幅"], errors="coerce")
+    for column in ("成交额", "流通市值", "涨停标记", "跌停标记"):
         if column not in normalized:
             normalized[column] = 0.0
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0.0)
@@ -681,7 +687,7 @@ def _group_stats(name: str, mask: pd.Series, frame: pd.DataFrame, feature_frame:
         subset_features = _features_for_codes(feature_frame, subset["代码"]) if not feature_frame.empty else pd.DataFrame()
     if subset.empty:
         return StyleGroupStats(name=name)
-    pct = pd.to_numeric(subset["涨跌幅"], errors="coerce").fillna(0.0)
+    pct = pd.to_numeric(subset["涨跌幅"], errors="coerce").dropna()
     amount = pd.to_numeric(subset["成交额"], errors="coerce").fillna(0.0)
     total_amount = pd.to_numeric(frame["成交额"], errors="coerce").fillna(0.0).sum()
     limit_up = pd.to_numeric(subset.get("涨停标记", pd.Series(0.0, index=subset.index)), errors="coerce").fillna(0.0)
@@ -870,7 +876,7 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
             continue
         mask = frame["所属板块"].astype(str).map(lambda value: _topic_label(value) == topic or topic in value)
         subset = frame[mask].copy()
-        pct = pd.to_numeric(subset.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        pct = pd.to_numeric(subset.get("涨跌幅", pd.Series(dtype=float)), errors="coerce").dropna()
         amount = pd.to_numeric(subset.get("成交额", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
         limit_up = pd.to_numeric(subset.get("涨停标记", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
         top20_count = sum(1 for item in top20_list if _topic_label(str(getattr(item, "sector", ""))) == topic)
@@ -889,20 +895,27 @@ def _mainline_stats(frame: pd.DataFrame, directions: list[CapitalDirection], top
             ),
         )
         leaders = _mainline_leaders(topic, subset, top20_list)
+        matched_top20 = [stock for stock in top20_list if _topic_label(str(getattr(stock, "sector", ""))) == topic]
+        status, adjusted_strength, core_count, core_decline_count = _mainline_frame_risk_status(strength, subset)
+        if status != "分歧/退潮风险":
+            status, adjusted_strength, core_count, core_decline_count = _mainline_risk_status(strength, matched_top20)
         candidate = MainlineStats(
             name=topic,
             rank=0,
-            stars=_stars(strength),
+            stars=_stars(adjusted_strength),
             up_count=int((pct > 0).sum()) if not pct.empty else 0,
             average_pct=float(pct.mean()) if not pct.empty else direction.pct_change,
             limit_up_count=int((limit_up == 1).sum()) if not limit_up.empty else 0,
             amount=float(amount.sum()),
             main_net_inflow=direction.main_net_inflow,
             top20_count=top20_count,
-            strength=strength,
+            strength=adjusted_strength,
             leaders=leaders,
-            persistence_stars=_stars(strength * 0.65 + min(max(direction.main_net_inflow, 0.0) / 100_000_000, 25)),
-            persistence_reason=_persistence_reason(strength, direction.main_net_inflow, top20_count),
+            persistence_stars=_stars(adjusted_strength * 0.65 + min(max(direction.main_net_inflow, 0.0) / 100_000_000, 25)),
+            persistence_reason=status if status == "分歧/退潮风险" else _persistence_reason(adjusted_strength, direction.main_net_inflow, top20_count),
+            status=status,
+            core_count=core_count,
+            core_decline_count=core_decline_count,
         )
         if _has_mainline_evidence(candidate):
             rows[topic] = candidate
@@ -921,21 +934,31 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
         top20_count = len(matched)
         leaders = _mainline_leaders_from_candidates(matched) or item.leaders
         strength = max(0.0, min(100.0, item.strength + top20_count * 4))
+        if matched:
+            status, adjusted_strength, core_count, core_decline_count = _mainline_risk_status(strength, matched)
+        else:
+            status = item.status
+            adjusted_strength = min(strength, 69.0) if status == "分歧/退潮风险" else strength
+            core_count = item.core_count
+            core_decline_count = item.core_decline_count
         candidate = MainlineStats(
-                name=item.name,
-                rank=item.rank,
-                stars=_stars(strength),
-                up_count=item.up_count,
-                average_pct=item.average_pct,
-                limit_up_count=item.limit_up_count,
-                amount=item.amount,
-                main_net_inflow=item.main_net_inflow,
-                top20_count=top20_count,
-                strength=strength,
-                leaders=leaders,
-                persistence_stars=_stars(strength * 0.75),
-                persistence_reason=_persistence_reason(strength, item.main_net_inflow, top20_count),
-            )
+            name=item.name,
+            rank=item.rank,
+            stars=_stars(adjusted_strength),
+            up_count=item.up_count,
+            average_pct=item.average_pct,
+            limit_up_count=item.limit_up_count,
+            amount=item.amount,
+            main_net_inflow=item.main_net_inflow,
+            top20_count=top20_count,
+            strength=adjusted_strength,
+            leaders=leaders,
+            persistence_stars=_stars(adjusted_strength * 0.75),
+            persistence_reason=status if status == "分歧/退潮风险" else _persistence_reason(adjusted_strength, item.main_net_inflow, top20_count),
+            status=status,
+            core_count=core_count,
+            core_decline_count=core_decline_count,
+        )
         if _has_mainline_evidence(candidate):
             updated.append(candidate)
     existing = {item.name for item in updated}
@@ -948,21 +971,56 @@ def _attach_top20_to_mainlines(mainlines: list[MainlineStats], top20: Iterable[o
     for topic, stocks in grouped.items():
         amount = sum(float(getattr(stock, "amount", 0.0) or 0.0) for stock in stocks)
         strength = max(0.0, min(100.0, 45 + len(stocks) * 8 + min(amount / 1_000_000_000, 25)))
+        status, adjusted_strength, core_count, core_decline_count = _mainline_risk_status(strength, stocks)
         candidate = MainlineStats(
-                name=topic,
-                rank=len(updated) + 1,
-                stars=_stars(strength),
-                amount=amount,
-                top20_count=len(stocks),
-                strength=strength,
-                leaders=_mainline_leaders_from_candidates(stocks),
-                persistence_stars=_stars(strength * 0.7),
-                persistence_reason=_persistence_reason(strength, 0.0, len(stocks)),
-            )
+            name=topic,
+            rank=len(updated) + 1,
+            stars=_stars(adjusted_strength),
+            amount=amount,
+            top20_count=len(stocks),
+            strength=adjusted_strength,
+            leaders=_mainline_leaders_from_candidates(stocks),
+            persistence_stars=_stars(adjusted_strength * 0.7),
+            persistence_reason=status if status == "分歧/退潮风险" else _persistence_reason(adjusted_strength, 0.0, len(stocks)),
+            status=status,
+            core_count=core_count,
+            core_decline_count=core_decline_count,
+        )
         if _has_mainline_evidence(candidate):
             updated.append(candidate)
     ranked = sorted(updated, key=lambda value: value.strength, reverse=True)
     return [MainlineStats(**{**item.__dict__, "rank": index}) for index, item in enumerate(ranked, start=1)]
+
+
+def _mainline_risk_status(strength: float, stocks: Iterable[object]) -> tuple[str, float, int, int]:
+    stock_list = list(stocks)
+    core_count = len(stock_list)
+    decline_count = sum(
+        1
+        for stock in stock_list
+        if float(getattr(stock, "daily_pct", 0.0) or 0.0) <= -5.0
+        or bool(getattr(stock, "near_limit_down", False))
+    )
+    if core_count and decline_count * 2 >= core_count:
+        return "分歧/退潮风险", min(strength, 69.0), core_count, decline_count
+    return "正常", strength, core_count, decline_count
+
+
+def _mainline_frame_risk_status(strength: float, subset: pd.DataFrame) -> tuple[str, float, int, int]:
+    if subset.empty or "涨跌幅" not in subset:
+        return "正常", strength, 0, 0
+    ranked = subset.copy()
+    ranked["_pct"] = pd.to_numeric(ranked["涨跌幅"], errors="coerce")
+    ranked["_amount"] = pd.to_numeric(ranked.get("成交额", pd.Series(0.0, index=ranked.index)), errors="coerce").fillna(0.0)
+    ranked = ranked.dropna(subset=["_pct"]).sort_values("_amount", ascending=False).head(10)
+    if ranked.empty:
+        return "正常", strength, 0, 0
+    limit_down = pd.to_numeric(ranked.get("跌停标记", pd.Series(0.0, index=ranked.index)), errors="coerce").fillna(0.0)
+    decline_count = int(((ranked["_pct"] <= -5.0) | (limit_down == 1)).sum())
+    core_count = len(ranked)
+    if core_count and decline_count * 2 >= core_count:
+        return "分歧/退潮风险", min(strength, 69.0), core_count, decline_count
+    return "正常", strength, core_count, decline_count
 
 
 def _mainline_leaders(topic: str, subset: pd.DataFrame, candidates: list[object]) -> list[dict]:
@@ -972,7 +1030,8 @@ def _mainline_leaders(topic: str, subset: pd.DataFrame, candidates: list[object]
     if subset.empty:
         return []
     ranked = subset.copy()
-    ranked["_pct"] = pd.to_numeric(ranked.get("涨跌幅", 0.0), errors="coerce").fillna(0.0)
+    ranked["_pct"] = pd.to_numeric(ranked.get("涨跌幅", pd.Series(dtype=float)), errors="coerce")
+    ranked = ranked.dropna(subset=["_pct"])
     ranked["_amount"] = pd.to_numeric(ranked.get("成交额", 0.0), errors="coerce").fillna(0.0)
     ranked = ranked.sort_values(["_pct", "_amount"], ascending=False).head(3)
     return [
@@ -998,9 +1057,9 @@ def _mainline_leaders_from_candidates(candidates: list[object]) -> list[dict]:
             {
                 "name": str(getattr(item, "name", "")),
                 "code": str(getattr(item, "code", "")),
-                "reason": _leader_reason(getattr(item, "amount", 0.0), getattr(item, "sector_pct_change", 0.0), getattr(item, "turnover_rate", 0.0), breakout, continuous),
+                "reason": _leader_reason(getattr(item, "amount", 0.0), getattr(item, "daily_pct", 0.0), getattr(item, "turnover_rate", 0.0), breakout, continuous),
                 "amount": float(getattr(item, "amount", 0.0) or 0.0),
-                "pct": float(getattr(item, "sector_pct_change", 0.0) or 0.0),
+                "pct": float(getattr(item, "daily_pct", 0.0) or 0.0),
                 "turnover": float(getattr(item, "turnover_rate", 0.0) or 0.0),
             }
         )

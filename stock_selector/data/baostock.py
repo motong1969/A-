@@ -60,14 +60,16 @@ class BaoStockDataFetcher:
         frame["名称"] = frame["code_name"].astype(str)
         industries = self._stock_industry_map()
         frame["所属板块"] = frame["code"].map(industries).fillna("未映射")
-        frame["涨跌幅"] = 0.0
+        frame["涨跌幅"] = pd.NA
         frame["成交额"] = 0.0
         frame["换手率"] = 0.0
         frame["流通市值"] = 0.0
         snapshots = self._latest_cached_snapshots()
         if not snapshots.empty:
             frame = frame.merge(snapshots, on="代码", how="left", suffixes=("", "_cached"))
-            for column in ("涨跌幅", "成交额", "换手率"):
+            if "涨跌幅_cached" in frame:
+                frame["涨跌幅"] = pd.to_numeric(frame["涨跌幅_cached"], errors="coerce")
+            for column in ("成交额", "换手率"):
                 cached = f"{column}_cached"
                 frame[column] = pd.to_numeric(frame[cached], errors="coerce").fillna(frame[column])
             frame = frame[["代码", "名称", "所属板块", "涨跌幅", "成交额", "换手率", "流通市值"]]

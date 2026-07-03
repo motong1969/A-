@@ -135,6 +135,8 @@ class AkShareCandidate:
     reasons: list[str]
     risks: list[str]
     action: str
+    daily_pct: float = 0.0
+    near_limit_down: bool = False
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,7 @@ class AkShareSelectionResult:
     ranked_candidates: list[AkShareCandidate]
     elimination_stats: dict | None = None
     market_style: MarketStyleSnapshot | None = None
+    high_risk_watch_pool: list[AkShareCandidate] | None = None
 
     @property
     def top10(self) -> list[AkShareCandidate]:
@@ -168,6 +171,10 @@ class AkShareSelectionResult:
     @property
     def validation_top20(self) -> list[AkShareCandidate]:
         return self.ranked_candidates[:20]
+
+    @property
+    def high_risk_pool(self) -> list[AkShareCandidate]:
+        return self.high_risk_watch_pool or []
 
 
 def is_allowed_main_board_code(code: str, settings: MainBoardStrategySettings | None = None) -> bool:
@@ -386,8 +393,10 @@ class AkShareV1Engine:
             self._apply_sector_heat_bonus(sorted(candidates, key=lambda item: item.score, reverse=True)),
             market_style,
         )
+        ranked, high_risk_watch_pool = self._split_high_risk_watch_pool(ranked)
         market_style = attach_top20_to_market_style(market_style, ranked[:20])
         elimination_stats["final_count"] = len(ranked)
+        elimination_stats["high_risk_watch_pool_count"] = len(high_risk_watch_pool)
         if hasattr(self.fetcher, "history_source_name"):
             elimination_stats["history_source"] = getattr(self.fetcher, "history_source_name", "") or "未知"
         if hasattr(self.fetcher, "history_stats"):
@@ -405,7 +414,24 @@ class AkShareV1Engine:
             ranked,
             elimination_stats,
             market_style,
+            high_risk_watch_pool,
         )
+
+    def _split_high_risk_watch_pool(
+        self, ranked: list[AkShareCandidate]
+    ) -> tuple[list[AkShareCandidate], list[AkShareCandidate]]:
+        allowed: list[AkShareCandidate] = []
+        watch_pool: list[AkShareCandidate] = []
+        for item in ranked:
+            if self._is_high_risk_decliner(item):
+                watch_pool.append(item)
+            else:
+                allowed.append(item)
+        return allowed, watch_pool
+
+    @staticmethod
+    def _is_high_risk_decliner(item: AkShareCandidate) -> bool:
+        return float(getattr(item, "daily_pct", 0.0) or 0.0) <= -5.0 or bool(getattr(item, "near_limit_down", False))
 
     def _apply_sector_heat_bonus(self, ranked: list[AkShareCandidate]) -> list[AkShareCandidate]:
         sector_counts: dict[str, int] = {}
@@ -869,6 +895,10 @@ class AkShareV1Engine:
             risks.append(f"市场状态为{market.status}，建议降低仓位")
         if not hasattr(self.fetcher, "risk_notice_codes"):
             risks.append("公告重大风险提示需在交易前复核")
+        daily_pct = float(features.get("daily_pct", 0.0)) * 100.0
+        near_limit_down = _number(spot.get("跌停标记")) == 1.0 or daily_pct <= -8.8
+        if daily_pct <= -5.0 or near_limit_down:
+            risks.append(f"当日涨跌幅{daily_pct:.2f}%，只能进入高位风险观察池，禁止今日前三和今日首选")
         buy_low = close * 0.985
         buy_high = close * 1.015
         stop_loss = min(float(features["ma20"]) * 0.985, close * 0.94)
@@ -887,6 +917,8 @@ class AkShareV1Engine:
             market_cap, f"{buy_low:.2f} - {buy_high:.2f}", round(stop_loss, 2), round(first_target, 2),
             reasons, risks,
             action,
+            round(daily_pct, 2),
+            near_limit_down,
         )
 
     def _candidate_rejection_reason(self, spot, features) -> str | None:
