@@ -2,54 +2,54 @@
 
 ## 第一名平均收益
 
-- next_day_return: 平均收益 -6.50%，样本 9
-- return_3d: 平均收益 -6.16%，样本 7
-- return_5d: 平均收益 -7.59%，样本 5
-- return_10d: 平均收益 -33.31%，样本 2
+- next_day_return: 平均收益 -6.40%，样本 10
+- return_3d: 平均收益 -6.51%，样本 9
+- return_5d: 平均收益 -9.77%，样本 7
+- return_10d: 平均收益 -25.60%，样本 3
 
 ## 第二名平均收益
 
-- next_day_return: 平均收益 9.06%，样本 9
-- return_3d: 平均收益 9.28%，样本 7
-- return_5d: 平均收益 13.19%，样本 5
-- return_10d: 平均收益 30.44%，样本 2
+- next_day_return: 平均收益 8.30%，样本 10
+- return_3d: 平均收益 3.04%，样本 9
+- return_5d: 平均收益 4.35%，样本 7
+- return_10d: 平均收益 20.10%，样本 3
 
 ## 第三名平均收益
 
-- next_day_return: 平均收益 2.72%，样本 9
-- return_3d: 平均收益 -1.80%，样本 7
-- return_5d: 平均收益 1.26%，样本 5
-- return_10d: 平均收益 7.01%，样本 2
+- next_day_return: 平均收益 1.63%，样本 10
+- return_3d: 平均收益 -3.53%，样本 9
+- return_5d: 平均收益 -4.83%，样本 7
+- return_10d: 平均收益 4.85%，样本 3
 
 ## 前10名平均收益
 
-- next_day_return: 平均收益 -1.38%，样本 86
-- return_3d: 平均收益 -3.31%，样本 66
-- return_5d: 平均收益 -4.27%，样本 46
-- return_10d: 平均收益 -7.15%，样本 16
+- next_day_return: 平均收益 -1.68%，样本 96
+- return_3d: 平均收益 -5.37%，样本 86
+- return_5d: 平均收益 -8.04%，样本 65
+- return_10d: 平均收益 -8.56%，样本 26
 
 ## 胜率统计
 
 ### 第1名
-- next_day_return: 胜率 44.44%，样本 9
-- return_3d: 胜率 57.14%，样本 7
-- return_5d: 胜率 60.00%，样本 5
-- return_10d: 胜率 0.00%，样本 2
+- next_day_return: 胜率 40.00%，样本 10
+- return_3d: 胜率 44.44%，样本 9
+- return_5d: 胜率 42.86%，样本 7
+- return_10d: 胜率 0.00%，样本 3
 
 ### 第2名
-- next_day_return: 胜率 44.44%，样本 9
-- return_3d: 胜率 42.86%，样本 7
-- return_5d: 胜率 60.00%，样本 5
-- return_10d: 胜率 100.00%，样本 2
+- next_day_return: 胜率 50.00%，样本 10
+- return_3d: 胜率 33.33%，样本 9
+- return_5d: 胜率 42.86%，样本 7
+- return_10d: 胜率 66.67%，样本 3
 
 ### 第3名
-- next_day_return: 胜率 55.56%，样本 9
-- return_3d: 胜率 42.86%，样本 7
-- return_5d: 胜率 60.00%，样本 5
-- return_10d: 胜率 50.00%，样本 2
+- next_day_return: 胜率 50.00%，样本 10
+- return_3d: 胜率 33.33%，样本 9
+- return_5d: 胜率 42.86%，样本 7
+- return_10d: 胜率 66.67%，样本 3
 
 ### 前10名
-- next_day_return: 胜率 40.70%，样本 86
-- return_3d: 胜率 37.88%，样本 66
-- return_5d: 胜率 41.30%，样本 46
-- return_10d: 胜率 37.50%，样本 16
+- next_day_return: 胜率 39.58%，样本 96
+- return_3d: 胜率 30.23%，样本 86
+- return_5d: 胜率 29.23%，样本 65
+- return_10d: 胜率 26.92%，样本 26
